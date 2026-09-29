@@ -1,0 +1,4 @@
+-r base.txt
+
+# PostgreSQL driver, for when DATABASE_URL moves off SQLite.
+psycopg[binary]==3.2.10
