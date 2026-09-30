@@ -1,0 +1,17 @@
+[Unit]
+Description=Simple POS Django Backend (SQLite)
+After=network.target
+
+[Service]
+User=hossam
+Group=hossam
+WorkingDirectory=/opt/simple-pos/current/backend
+Environment="PATH=/opt/simple-pos/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PYTHONPATH=/opt/simple-pos/current/backend"
+EnvironmentFile=/opt/simple-pos/.env
+ExecStart=/opt/simple-pos/venv/bin/gunicorn config.wsgi:application --bind 127.0.0.1:8120 --workers 2 --timeout 60 --access-logfile /opt/simple-pos/gunicorn-access.log --error-logfile /opt/simple-pos/gunicorn-error.log
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,34 @@
+/* 80mm thermal receipt printer styles (ADR-0012, BR-PAY-07) */
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  #thermal-receipt-printable,
+  #thermal-receipt-printable * {
+    visibility: visible;
+  }
+
+  #thermal-receipt-printable {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 76mm;
+    margin: 2mm auto;
+    padding: 0;
+    font-family: 'IBM Plex Sans Arabic', sans-serif;
+    font-size: 12px;
+    line-height: 1.4;
+    color: #000000 !important;
+    background: #ffffff !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}

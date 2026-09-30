@@ -1,0 +1,1 @@
+"""Store Settings domain package."""

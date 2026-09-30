@@ -1,0 +1,59 @@
+# Simple POS — compose TEMPLATE (ADR-0002, ADR-0004). devops owns the server copy in /opt/simple-pos/.
+# Single environment. Every published port is bound to 127.0.0.1; the host nginx proxies
+#   cashier.hossam-ameen.online     → 127.0.0.1:${WEB_PORT:-8121}
+#   api.cashier.hossam-ameen.online → 127.0.0.1:${API_PORT:-8120}
+# Values come from .env next to this file (never committed). Migrations run explicitly after a backup:
+#   docker compose run --rm api migrate
+name: simple-pos
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    command: ["postgres", "-c", "shared_buffers=128MB", "-c", "max_connections=40"]
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # no ports: the DB is reachable only on the compose network
+
+  api:
+    image: simple-pos-api:${IMAGE_TAG:-latest}
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      STATIC_ROOT: /app/staticfiles
+    volumes:
+      - ${STATIC_PATH:-./staticfiles}:/app/staticfiles
+    ports:
+      - "127.0.0.1:${API_PORT:-8120}:8000"
+
+  web:
+    image: simple-pos-web:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:?set VITE_API_BASE_URL}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8121}:80"
+
+volumes:
+  db-data:
+
+x-logging-note: "Docker json-file log rotation (10m x 3) is configured host-wide in /etc/docker/daemon.json (devops)."

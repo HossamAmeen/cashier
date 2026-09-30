@@ -1,0 +1,105 @@
+# CI (CLAUDE.md §6, ADR-0008): lint, typecheck, tests, contract diff. Never runs E2E/QA (server only, ADR-0004).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pos
+          POSTGRES_PASSWORD: pos
+          POSTGRES_DB: pos
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pos" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      DATABASE_URL: postgres://pos:pos@localhost:5432/pos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements/*.txt
+      - run: pip install -r requirements/development.txt
+      - name: Lint (ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Typecheck (mypy)
+        run: mypy .
+      - name: Django checks + migrations drift
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+      - name: Tests (pytest against Postgres 16)
+        run: pytest --cov=. --cov-report=term-missing
+      - name: Contract diff (openapi.yaml vs drf-spectacular)
+        # All 42 contract operations implemented (42/42).
+        run: python scripts/contract_check.py
+      - name: Security lint (bandit)
+        run: bandit -q -r apps common config -x '*/tests/*'
+
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: API types are up to date with the contract
+        run: pnpm --filter frontend check:api
+      - name: Lint (eslint + prettier)
+        run: |
+          pnpm --filter frontend lint
+          pnpm --filter frontend format:check
+      - name: Typecheck (tsc)
+        run: pnpm --filter frontend typecheck
+      - name: Unit tests (vitest)
+        run: pnpm --filter frontend test
+      - name: Build (vite + PWA)
+        run: pnpm --filter frontend build
+        env:
+          VITE_API_BASE_URL: https://api.cashier.hossam-ameen.online
+
+  e2e-static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck Playwright suites (they only run on the server)
+        run: pnpm --filter e2e typecheck
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -t simple-pos-api:ci backend
+      - name: Build web image
+        run: docker build -f frontend/Dockerfile --build-arg VITE_API_BASE_URL=https://api.cashier.hossam-ameen.online -t simple-pos-web:ci .
+      - name: Validate compose template
+        run: cp .env.compose.example .env && docker compose config -q

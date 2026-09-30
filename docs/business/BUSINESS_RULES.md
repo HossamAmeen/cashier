@@ -1,6 +1,6 @@
 # Simple POS — Business Rules (SOURCE OF TRUTH)
 
-> **Status:** v1.1 — MVP
+> **Status:** v1.3 — MVP (Gate A approved 2026-09-29; Gate B approved 2026-09-29)
 > **Owner:** product-analyst agent. Only the product-analyst may edit this file, and only after the human owner approves the change.
 > **Precedence:** `BUSINESS_RULES.md` > `docs/api/openapi.yaml` > `docs/design/Simple-POS-MVP-UIUX-Proposal.pdf` > code.
 > If code, tests, or UI disagree with this file, **this file wins** and the other artifact gets fixed.
@@ -43,14 +43,19 @@ These are **out of scope**, and building them anyway is a defect:
 
 | Entity | Key fields | Notes |
 |---|---|---|
-| **User** | id, name, username (unique, case-insensitive, `[a-z0-9._]{3,32}`), password_hash, role `ADMIN\|CASHIER`, status `ACTIVE\|DISABLED`, last_login_at | A **Cashier** is a User with role CASHIER. There is no separate cashier table; the Cashiers screens are a projection of users + shifts. |
-| **Category** | id, name (unique), sort_order (int), status `ACTIVE\|DISABLED` | |
-| **Item** | id, category_id, name (unique within category), price_minor (> 0), description (≤ 500 chars), status `ACTIVE\|DISABLED` | |
+| **User** | id, name (1–100 chars), username (unique, case-insensitive, `[a-z0-9._]{3,32}`), password_hash, role `ADMIN\|CASHIER`, status `ACTIVE\|DISABLED`, last_login_at | A **Cashier** is a User with role CASHIER. There is no separate cashier table; the Cashiers screens are a projection of users + shifts. |
+| **Category** | id, name (unique, 1–50 chars), sort_order (int), status `ACTIVE\|DISABLED`, icon (optional; null or a key from a fixed built-in set) | Icon rules: BR-ITEM-07 (OQ-33). |
+| **Item** | id, category_id, name (unique within category, 1–80 chars), price_minor (> 0), description (≤ 500 chars), status `ACTIVE\|DISABLED` | |
 | **Table** | id, number (unique positive int), is_active (bool) | Occupancy is **derived**, never stored (BR-TBL-01). |
 | **Shift** | id, cashier_id, status `OPEN\|CLOSED`, opened_at, opening_balance_minor (≥ 0), closed_at, counted_cash_minor, expected_cash_minor, difference_minor, plus snapshot totals | |
-| **Order** | id, number (global sequence starting at 1001), type `DINE_IN\|TAKEAWAY`, table_id (required iff DINE_IN), cashier_id, shift_id, status `OPEN\|PAID\|CANCELLED`, subtotal_minor, discount_minor, total_minor, created_at, paid_at, cancelled_at, cancel_reason | |
-| **OrderLine** | id, order_id, item_id, item_name_snapshot, unit_price_snapshot_minor, qty (int ≥ 1), note (≤ 140 chars), line_total_minor | |
+| **Order** | id, number (global sequence starting at 1001), type `DINE_IN\|TAKEAWAY`, table_id (required iff DINE_IN), cashier_id, shift_id, status `OPEN\|PAID\|CANCELLED`, subtotal_minor, discount_minor, total_minor, created_at, paid_at, cancelled_at, cancel_reason (3–200 chars after trimming; BR-ORD-09) | |
+| **OrderLine** | id, order_id, item_id, item_name_snapshot, unit_price_snapshot_minor, qty (int 1–999; BR-ORD-02), note (≤ 140 chars), line_total_minor | |
 | **Payment** | id, order_id (unique — exactly one payment per order), method `CASH\|CARD`, amount_due_minor, amount_received_minor, change_minor, paid_at, cashier_id, shift_id | |
+| **Settings** | business_name (non-empty text, 1–80 chars), receipt_footer (text, 0–200 chars, may be empty) | **Singleton**: exactly one record. Rules: BR-SET-01..03 (OQ-7). |
+
+Every entity above also has `created_at`, set by the server in UTC and never changed afterwards (OQ-35). It is used for display (e.g. the user "تاريخ الإضافة") and for history filters. It carries no other business behavior.
+
+**Length and range limits (Gate B, OQ-41).** The limits written in the table above are inclusive and count characters. A value outside its limit is rejected with `VALIDATION_ERROR` and nothing is saved. Where a field is trimmed (business_name, cancel_reason), the limit applies to the trimmed value.
 
 ---
 
@@ -58,12 +63,12 @@ These are **out of scope**, and building them anyway is a defect:
 
 | ID | Rule |
 |---|---|
-| BR-ROLE-01 | **ADMIN** may manage users, cashiers, tables, categories, and items. ADMIN may view all orders, all shifts, and shift summaries. |
+| BR-ROLE-01 | **ADMIN** may manage users, cashiers, tables, categories, items, and Settings (BR-SET-02). ADMIN may view all orders, all shifts, and shift summaries. |
 | BR-ROLE-02 | **ADMIN** may NOT open shifts, create or edit orders, take payments, or cancel orders. |
 | BR-ROLE-03 | **CASHIER** may log in, open and close **their own** shift, view tables, create/edit/cancel orders, and take payments. |
 | BR-ROLE-04 | A CASHIER sees only the orders and shifts they own in history screens. |
 | BR-ROLE-05 | Permissions are enforced **on the server** for every endpoint. Hiding a button in the UI is not enforcement. |
-| BR-ROLE-06 | A CASHIER can only mutate orders they created. Another cashier's open order on a table is **read-only** for them. |
+| BR-ROLE-06 | A CASHIER can only mutate orders they created. Another cashier's open order on a table is **read-only** for them. A CASHIER may read another cashier's order **only while its status is OPEN**. Reading another cashier's PAID or CANCELLED order → `FORBIDDEN_ROLE` (Gate B, OQ-45). |
 
 ---
 
@@ -123,6 +128,17 @@ These are **out of scope**, and building them anyway is a defect:
 | BR-ITEM-04 | An item referenced by any order line cannot be deleted; it can only be disabled (`ITEM_IN_USE`). An item never used may be hard-deleted. |
 | BR-ITEM-05 | A category that contains items cannot be deleted (`CATEGORY_NOT_EMPTY`). It can be disabled, which hides all its items from ordering. |
 | BR-ITEM-06 | Categories are shown on the order screen in ascending sort_order, then by name. |
+| BR-ITEM-07 | A category's `icon` is optional. When set, it must be a key from the fixed built-in icon set; any other value → `VALIDATION_ERROR`. Image upload does not exist. Items have no icon field: an item shows its category's icon, or a generic icon when the category's icon is null. (OQ-33) The fixed set is exactly these 20 keys (Gate B, OQ-43; mirrored by `CategoryIcon` in openapi.yaml): `coffee`, `tea`, `juice`, `soft_drink`, `water`, `breakfast`, `sandwich`, `burger`, `pizza`, `grill`, `chicken`, `pasta`, `rice`, `salad`, `soup`, `appetizer`, `dessert`, `cake`, `ice_cream`, `bakery`. |
+
+---
+
+## 7a. Settings
+
+| ID | Rule |
+|---|---|
+| BR-SET-01 | Exactly one Settings record exists (singleton), created by the seed with receipt_footer = "شكرًا لزيارتكم". There is no create or delete operation. business_name is trimmed and must be 1–80 characters; receipt_footer is 0–200 characters. Any other value → `VALIDATION_ERROR`. (OQ-7, OQ-41) |
+| BR-SET-02 | Only ADMIN may update Settings; any other caller → `FORBIDDEN_ROLE`. Any authenticated user may read Settings, because the receipt uses them (BR-PAY-07). The admin edits them on the "الإعدادات" screen, which is outside PDF screens 01–20 (OQ-7). |
+| BR-SET-03 | Currency is not a setting. It is fixed to EGP with the label `ج.م` (BR-GEN-01). No logo upload exists in the MVP. (OQ-2, OQ-7) |
 
 ---
 
@@ -131,21 +147,22 @@ These are **out of scope**, and building them anyway is a defect:
 | ID | Rule |
 |---|---|
 | BR-ORD-01 | An order is created only on **"تأكيد الطلب"**. Before that, the cart is client-side state. A created order starts with status OPEN. |
-| BR-ORD-02 | An order must have ≥ 1 line (`ORDER_EMPTY`). Quantity is an integer ≥ 1. Reducing quantity to 0 removes the line. |
+| BR-ORD-02 | An order must have ≥ 1 line (`ORDER_EMPTY`). Quantity per line is an integer from 1 to 999; any other value → `VALIDATION_ERROR` (OQ-41). Reducing quantity to 0 removes the line. |
 | BR-ORD-03 | Each order belongs to exactly one cashier (its creator) and to that cashier's OPEN shift at creation time. |
 | BR-ORD-04 | DINE_IN orders require an available table (BR-TBL-03). TAKEAWAY orders ("سفري") have no table. |
 | BR-ORD-05 | Adding the same item twice merges into one line (qty += 1) **if the notes are equal**. Otherwise it creates a separate line. |
 | BR-ORD-06 | Order calculations:<br>• `line_total` = unit_price_snapshot × qty<br>• `subtotal` = Σ line_total<br>• `total` = subtotal − discount |
 | BR-ORD-07 | The discount is a **fixed amount** with 0 ≤ discount ≤ subtotal (`DISCOUNT_INVALID`). If the UI offers a percentage, it converts it to an amount (rounded half-up to a whole minor unit) before sending. |
 | BR-ORD-08 | Only OPEN orders can be edited (lines, qty, notes, discount) or cancelled (`ORDER_NOT_EDITABLE`). PAID and CANCELLED are terminal states. |
-| BR-ORD-09 | Cancelling requires confirmation and a reason (free text, ≥ 3 chars). Cancelled orders remain in history with status CANCELLED. |
+| BR-ORD-09 | Cancelling requires confirmation and a reason (free text, 3–200 chars after trimming; otherwise `VALIDATION_ERROR`, OQ-41). Cancelled orders remain in history with status CANCELLED. |
 | BR-ORD-10 | The order number is a global, gap-tolerant sequence starting at 1001, displayed as `#1048`. |
 | BR-PAY-01 | Supported payment methods are **CASH** and **CARD** only. Each order has exactly one payment; no split payments. |
 | BR-PAY-02 | CASH: amount_received ≥ total (`INSUFFICIENT_CASH`), and change = amount_received − total. |
 | BR-PAY-03 | CARD: amount_received = total and change = 0. The server does not accept a received amount for CARD. |
-| BR-PAY-04 | Payment runs in **one DB transaction**, which:<br>1. locks the order row<br>2. verifies the order is OPEN and belongs to the caller's open shift<br>3. inserts the Payment<br>4. sets the order to PAID with paid_at<br>The endpoint is idempotent by `Idempotency-Key` header. A double submit must never create two payments. |
+| BR-PAY-04 | Payment runs in **one DB transaction**, which:<br>1. locks the order row<br>2. verifies the order is OPEN and belongs to the caller's open shift<br>3. inserts the Payment<br>4. sets the order to PAID with paid_at<br>The endpoint is idempotent by `Idempotency-Key` header. A double submit must never create two payments. Reusing a key with a different request body → `IDEMPOTENCY_CONFLICT`. |
 | BR-PAY-05 | After payment succeeds, the table becomes AVAILABLE (derived, per BR-TBL-05). The success screen shows number, total, method, and time. |
 | BR-PAY-06 | Receipt printing uses the browser print dialog with an 80 mm receipt layout. There is no printer driver integration in the MVP. |
+| BR-PAY-07 | The receipt is titled **"إيصال"**. It contains no tax wording and no tax lines (OQ-1, OQ-8). In order, it shows: Settings.business_name; order number; table number or "سفري"; paid date and time (Cairo); cashier name; lines (name snapshot × qty, line total); subtotal; discount; total; payment method; for CASH, amount received and change; Settings.receipt_footer (OQ-9). Printing is offered only on screen 14; there is no reprint later (OQ-10). |
 
 ---
 
@@ -173,6 +190,21 @@ These are **out of scope**, and building them anyway is a defect:
 | USER_HAS_OPEN_SHIFT | 409 | المستخدم لديه وردية مفتوحة |
 | LAST_ADMIN | 409 | يجب وجود مدير نشط واحد على الأقل |
 | VALIDATION_ERROR | 422 | تحقق من البيانات المدخلة |
+| UNAUTHENTICATED | 401 | انتهت الجلسة، سجّل الدخول مرة أخرى |
+| NOT_FOUND | 404 | العنصر غير موجود |
+| DUPLICATE_VALUE | 409 | القيمة مستخدمة بالفعل |
+| IDEMPOTENCY_CONFLICT | 409 | طلب مكرر ببيانات مختلفة |
+| INTERNAL_ERROR | 500 | حدث خطأ غير متوقع، حاول مرة أخرى |
+
+When the codes added in v1.2 and v1.3 apply (OQ-40, OQ-42, OQ-44):
+- `UNAUTHENTICATED`: any endpoint except login, called with a missing, invalid, expired or revoked session.
+- `NOT_FOUND`: a referenced resource id does not exist. This covers an id in the URL path **and** an id in the request body, e.g. `table_id`, `item_id` or `category_id` (Gate B, OQ-44).
+- `DUPLICATE_VALUE`: a uniqueness constraint from §2 is violated. These are username (case-insensitive), category name, item name within its category, and table number.
+- `IDEMPOTENCY_CONFLICT`: an `Idempotency-Key` is reused with a different request body (BR-PAY-04).
+- A cancel reason under 3 characters (BR-ORD-09) and all other format or range failures stay `VALIDATION_ERROR`. This includes the length and range limits in §2 (OQ-41).
+- `INTERNAL_ERROR`: an unexpected server failure (HTTP 500). It is a technical code, not a business rejection, and no business rule may use it to reject a request (Gate B, OQ-42).
+
+**UI-only message (not a server code; Gate B, OQ-42).** When the device has no network connection, the UI shows the banner "لا يوجد اتصال بالإنترنت — لا يمكن تنفيذ العمليات حتى يعود الاتصال". Nothing is queued for later: offline order creation is out of scope (§0).
 
 ---
 
@@ -200,7 +232,7 @@ Cashier `ahmed.cashier` opens a shift with opening balance 500.00. On table 5 he
 Expected so far:
 - subtotal = 315.00
 - after discount 15.00, total = 300.00
-- confirming makes table 5 OCCUPIED, showing 5 items and 315 → 300 total
+- confirming makes table 5 OCCUPIED, showing 5 items and total 300 (subtotal 315, discount 15). The table card displays 300.00 (BR-TBL-04, OQ-14).
 
 He pays CASH, receiving 350.00. Expected:
 - change = 50.00
@@ -253,26 +285,26 @@ Shift has opening balance 500.00, cash_total 3,120.00, card_total 1,730.00. The 
 
 ---
 
-## 12. Open questions (defaults apply until the owner decides)
+## 12. Decided questions (Gate A — DECIDED 2026-09-29)
 
-Full detail (options, references, owner decision, dates) is in `docs/product/open-questions.md`, which mirrors this table. Items marked ⚠ need an explicit owner answer at Gate A. **No row below changes an existing rule.** Each default is the conservative reading of §0–§11 plus the PDF.
+**Status: DECIDED.** On 2026-09-29 the owner approved Gate A and accepted every default below unchanged. For the ⚠ items (OQ-7, OQ-8, OQ-12, OQ-33, OQ-40), option (a) was approved. Each row is now a **binding decision** with the same force as a rule. Cite it as "OQ-n". Where a decision required a rule change, the rule was edited in v1.2 and is cited in the row. Full detail (options, references, owner decision, dates) is in `docs/product/open-questions.md`, which mirrors this table.
 
-| # | Question | Default in force |
+| # | Question | Decision (approved 2026-09-29) |
 |---|---|---|
-| OQ-1 | Tax/VAT on receipts? | No tax in MVP. |
-| OQ-2 | Business name and logo on the receipt? | Configured in Settings (ADMIN). ⚠ See OQ-7. |
+| OQ-1 | Tax/VAT on receipts? | No tax in MVP (BR-PAY-07). |
+| OQ-2 | Business name and logo on the receipt? | business_name from Settings; no logo (BR-SET-01..03, BR-PAY-07). |
 | OQ-3 | May an ADMIN force-close a cashier's shift? | No (not in MVP). |
 | OQ-4 | Login by username only, or also by email (the PDF label mentions email)? | Username only. |
 | OQ-5 | Behavior of "نسيت كلمة المرور؟"? | Static hint to contact the admin. No self-service reset. |
 | OQ-6 | Meaning of "تذكرني على هذا الجهاز"? | Checked = 7-day persistent session; unchecked = ends when the browser closes. |
-| OQ-7 | ⚠ Settings screen/entity (the nav shows it; not among screens 01–20; no entity)? Configurable currency? | Minimal Settings (business_name, receipt footer), ADMIN only. Currency is fixed to EGP (BR-GEN-01). |
-| OQ-8 | ⚠ The receipt title "فاتورة ضريبية مبسطة" contradicts OQ-1? | Title "إيصال"; no tax wording. |
-| OQ-9 | Receipt fields? | Business name, order #, table/سفري, date & time, cashier, lines, subtotal, discount, total, method, received/change. |
-| OQ-10 | Reprint receipts later? | No; print only from screen 14. |
+| OQ-7 | ⚠ Settings screen/entity (the nav shows it; not among screens 01–20; no entity)? Configurable currency? | (a): minimal Settings (business_name, receipt footer), ADMIN only. Currency is fixed to EGP (BR-GEN-01). No logo upload. → §2 Settings, BR-SET-01..03. |
+| OQ-8 | ⚠ The receipt title "فاتورة ضريبية مبسطة" contradicts OQ-1? | (a): title "إيصال"; no tax wording. → BR-PAY-07. |
+| OQ-9 | Receipt fields? | Business name, order #, table/سفري, date & time, cashier, lines, subtotal, discount, total, method, received/change, footer. → BR-PAY-07. |
+| OQ-10 | Reprint receipts later? | No; print only from screen 14. → BR-PAY-07. |
 | OQ-11 | Cashier history: own orders (all shifts) or the current shift only? | Own orders, all shifts (BR-ROLE-04). |
-| OQ-12 | ⚠ Shift list and closed-shift summary screens (not in 01–20)? | Reuse the screen 17 table and a read-only screen 05 layout. The cashier UI shows the current shift only. |
+| OQ-12 | ⚠ Shift list and closed-shift summary screens (not in 01–20)? | (a): reuse the screen 17 table for the admin shift list and a read-only screen 05 layout for the closed-shift summary. The cashier UI shows the current shift only; the API lets a cashier read their own shifts (BR-ROLE-04). |
 | OQ-13 | Cashier "الحساب" page? | Read-only profile + logout. |
-| OQ-14 | Table card shows the subtotal or the total after discount? | Total after discount (BR-TBL-04). |
+| OQ-14 | Table card shows the subtotal or the total after discount? | Total after discount (BR-TBL-04). AC-01 wording clarified in v1.2. |
 | OQ-15 | Dashboard KPI definitions (orders count, today's sales)? | Shift screens: PAID count + OPEN count separately. Admin: sales by paid_at today; orders = all created today. |
 | OQ-16 | Timestamp for history filters; week start? | created_at; sales by paid_at; week starts Saturday (Cairo). |
 | OQ-17 | Takeaway order entry point? | A "طلب سفري" action on screens 06/02, plus "طلب جديد" on 14. |
@@ -291,17 +323,30 @@ Full detail (options, references, owner decision, dates) is in `docs/product/ope
 | OQ-30 | USER_DISABLED disclosure; throttle reset? | USER_DISABLED only after a correct password; success resets the counter. |
 | OQ-31 | Username editable? Does a password change revoke sessions? | Yes / yes. |
 | OQ-32 | Delete never-used tables? Zones? | No delete; no zones. |
-| OQ-33 | ⚠ Category/item icons (no entity field)? | Optional category icon from a fixed set; items inherit it. |
+| OQ-33 | ⚠ Category/item icons (no entity field)? | (a): optional category icon from a fixed set; items inherit it; no uploads. → §2 Category, BR-ITEM-07. |
 | OQ-34 | Money and time display format (the PDF shows whole numbers)? | 2 decimals everywhere + thousands separator; 12-hour ص/م; DD/MM/YYYY. |
-| OQ-35 | Shift code, history range, user created date? | "SH-"+4-digit id; last 30 days; created_at on all entities. |
+| OQ-35 | Shift code, history range, user created date? | "SH-"+4-digit id; last 30 days; created_at on all entities (§2). |
 | OQ-36 | Zero-difference label; reason for a shortage? | "مطابق"; no reason. |
 | OQ-37 | An admin disables or demotes themselves? | Allowed subject to BR-USR-04. |
 | OQ-38 | Concurrent shifts sharing one drawer? | One drawer per cashier assumed. |
 | OQ-39 | A shift open past midnight? | No auto-close. |
-| OQ-40 | ⚠ Missing §9 codes (401, 404, duplicates, idempotency conflict)? | Duplicates → VALIDATION_ERROR; 401/404 provisional codes pending owner approval. |
+| OQ-40 | ⚠ Missing §9 codes (401, 404, duplicates, idempotency conflict)? | (a): `UNAUTHENTICATED`, `NOT_FOUND`, `DUPLICATE_VALUE`, `IDEMPOTENCY_CONFLICT` added to §9. A short cancel reason stays `VALIDATION_ERROR`. |
+
+**Gate B — DECIDED 2026-09-29.** The owner approved the API contract. These questions were raised in the contract review (`docs/api/contract-review.md`) and are binding like the rows above.
+
+| # | Question | Decision (approved 2026-09-29, Gate B) |
+|---|---|---|
+| OQ-41 | Text-length and quantity limits missing from BR? | business_name 1–80, receipt_footer 0–200, user name 1–100, category name 1–50, item name 1–80, cancel reason 3–200 (trimmed), qty per line 1–999. A value outside a limit → `VALIDATION_ERROR`. → §2, BR-SET-01, BR-ORD-02, BR-ORD-09. |
+| OQ-42 | Code and message for an unexpected server error? Offline message? | `INTERNAL_ERROR` 500 "حدث خطأ غير متوقع، حاول مرة أخرى" added to §9. The UI-only offline banner is recorded in §9. |
+| OQ-43 | Contents of the fixed category icon set (BR-ITEM-07)? | The team-lead's 20 keys, listed in BR-ITEM-07. |
+| OQ-44 | Unknown id in the request body: `VALIDATION_ERROR` or `NOT_FOUND`? | `NOT_FOUND` (404), for path and body ids alike. → §9. |
+| OQ-45 | May a CASHIER read another cashier's order outside the tables flow? | Only while it is OPEN. Otherwise → `FORBIDDEN_ROLE`. → BR-ROLE-06. |
+| OQ-46 | Error codes for edge cases in the contract defaults (Gate B D1, D5, D6)? | A CASHIER reading another cashier's shift, or passing another cashier's `cashier_id` or `shift_id` as a filter → `FORBIDDEN_ROLE`. Closing an already CLOSED shift → `NO_OPEN_SHIFT`. The receipt of an order that is not PAID → `NOT_FOUND`. Every 429 → `TOO_MANY_ATTEMPTS`. |
 
 ---
 
 ## Changelog
 - v1.0 — Initial rules derived from the UI/UX proposal PDF.
 - v1.1 — 2026-09-28 — product-analyst (P1-01): §12 extended with OQ-4…OQ-40, found while mapping the UI/UX PDF to user stories (see docs/product/open-questions.md and gaps-and-contradictions.md). Open questions only: no rule in §0–§11 was added, removed or changed. Pending owner decisions at Gate A.
+- v1.2 — 2026-09-29 — product-analyst (P1-02): **Gate A approved by the owner on 2026-09-29**, accepting all defaults for OQ-1…OQ-40 unchanged (option (a) for ⚠ OQ-7, OQ-8, OQ-12, OQ-33, OQ-40). §12 marked DECIDED. Rule edits: §2 adds the Settings singleton entity, the optional Category `icon`, and `created_at` on all entities. BR-ROLE-01 adds Settings to ADMIN scope. New BR-ITEM-07 (category icon). New §7a with BR-SET-01..03 (Settings). BR-PAY-04 adds `IDEMPOTENCY_CONFLICT`. New BR-PAY-07 (receipt title "إيصال" and content). §9 adds `UNAUTHENTICATED`, `NOT_FOUND`, `DUPLICATE_VALUE` and `IDEMPOTENCY_CONFLICT`, plus when each applies. AC-01 table-card wording clarified. No existing ID was renumbered or removed.
+- v1.3 — 2026-09-29 — product-analyst (P2-03): **Gate B approved by the owner on 2026-09-29** (as relayed by the coordinator), deciding D2, D3 and D4 of the contract review and accepting its two major clarifications. §2 adds length and range limits: user name, category name, item name, cancel_reason, qty 1–999, and the Settings fields (OQ-41). BR-SET-01, BR-ORD-02 and BR-ORD-09 are refined with those limits. BR-ITEM-07 lists the 20 icon keys (OQ-43). BR-ROLE-06: a CASHIER reads another cashier's order only while it is OPEN, else `FORBIDDEN_ROLE` (OQ-45). §9 adds `INTERNAL_ERROR` 500 and the UI-only offline banner (OQ-42), and extends `NOT_FOUND` to ids in the request body (OQ-44). §12 adds the Gate B decisions OQ-41…OQ-46. No ID was renumbered or removed.

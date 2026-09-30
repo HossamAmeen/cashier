@@ -115,3 +115,123 @@ Scope, following the owner's decisions above: FRONT_DOMAIN and BACKEND_DOMAIN on
   - Backend: Django REST Framework, following DRF_SKILL.md. This replaces NestJS/Prisma via an ADR, and CLAUDE.md §4 gets updated by the team-lead.
   - Frontend: PWA implementing the MVP PDF design (screens 01–20).
 - Still open: SSH access for the agent (blocked by the permission system), and SSH_KEY_PATH.
+
+## Re-run 2026-09-29 (SSH probe)
+
+Scope: read-only SSH probe (`ssh -i ~/.ssh/id_ed25519 hossam@34.123.215.195`), which the owner has now allowed. No installs, no config edits, no reloads or restarts, and no ufw or sshd changes. Bootstrap was not run. No secrets were printed or recorded.
+
+### Verdict: GO for an additive bootstrap. There are no blockers. There are 3 warnings (W1–W3) for the owner to note.
+
+| # | Check | Result | Notes |
+|---|---|---|---|
+| 1 | SSH login with `~/.ssh/id_ed25519` as `hossam`:22 | PASS | BatchMode (key only) works. Hostname `dental-clinic` (GCP us-central1-a). |
+| 2 | OS | PASS | Ubuntu 24.04.5 LTS, kernel 7.0.0-1013-gcp. Timezone is already UTC. |
+| 3 | vCPU | PASS | 2 |
+| 4 | RAM | WARN (W1) | 3.8 GiB total, 3.1 GiB available, **no swap**. That is borderline against the 4 GB requirement, and the host is shared by 3 apps. |
+| 5 | Free disk on `/` | PASS | 19 GB total, 11 GB free (43% used) |
+| 6 | Passwordless sudo (`sudo -n true`) | PASS | `hossam` is in `google-sudoers` |
+| 7 | Docker / compose | NOT INSTALLED | Bootstrap has to install Docker Engine and the compose plugin from Docker's apt repo. Nothing else uses Docker, so there is no conflict. |
+| 8 | nginx | PASS | nginx/1.24.0 (Ubuntu), active. `nginx -t` passes. `conf.d/` is empty. |
+| 9 | certbot | PASS | certbot 2.9.0 (apt), and `certbot.timer` is active. Existing certs use the nginx authenticator. |
+| 10 | ufw | INFO | **inactive**. External filtering is done by the GCP VPC firewall (22/80/443 open). |
+| 11 | fail2ban / unattended-upgrades | INFO | fail2ban is inactive. unattended-upgrades is active. |
+| 12 | `/opt/simple-pos` | ABSENT | `/opt` is empty |
+| 13 | Local PostgreSQL | ABSENT | There is no postgres or redis package, and no socket. The POS DB will be containerised and will not publish a host port. |
+
+### Tenants already on this host (must not be disrupted)
+| App | nginx site (sites-enabled) | server_name | Upstream | Cert name |
+|---|---|---|---|---|
+| Delivery ("flash") | `delivery.hossam-ameen.online`, `api.delivery.hossam-ameen.online` | same as the site names | static `/srv/flash/current/frontend/dist`; API → `127.0.0.1:8010` (gunicorn, `flash-backend.service`) | `flash-delivery` (expires 2026-12-26) |
+| Dental clinic (**new finding (W2)**) | `dental.hossam-ameen.online.conf`, `api.dental.hossam-ameen.online.conf` | same as the site names | `127.0.0.1:8000` (gunicorn, `dental-clinic-backend.service`) | `dental.hossam-ameen.online` (expires 2026-12-25) |
+| nginx default | `default` | `_` (default_server on :80) | `/var/www/html` | none |
+
+### Listening TCP ports
+`0.0.0.0/[::]:22` sshd · `0.0.0.0/[::]:80,443` nginx · `127.0.0.1:8000` gunicorn (dental) · `127.0.0.1:8010` gunicorn (delivery) · `127.0.0.53/54:53` systemd-resolved.
+**Chosen POS ports** (free, localhost only): `127.0.0.1:8120` = POS API (DRF/gunicorn container) and `127.0.0.1:8121` = POS web (static PWA container). Postgres is on the internal compose network only, with no host port.
+
+### Warnings
+- **W1: memory.** 3.8 GiB and no swap, shared by 3 apps plus Docker plus Postgres. The bootstrap plan adds a 2 GiB swapfile (additive). Keep gunicorn workers at 2 and Postgres `shared_buffers` at 128 MB.
+- **W2: third tenant.** A dental-clinic app (ports 8000, `dental*` vhosts, its own cert) also lives on this host. It gets the same "do not touch" treatment as delivery.
+- **W3: installing Docker** adds iptables chains and a `docker0` bridge. ufw is inactive and no app publishes on 0.0.0.0 apart from nginx and sshd, so this is low risk. All POS ports are bound to `127.0.0.1` explicitly.
+
+### Proposed additive bootstrap plan (NOT executed; needs owner go-ahead)
+1. **Swap**: `fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`, then add a line to `/etc/fstab`. Skip this step if `/swapfile` already exists.
+2. **Docker**: add Docker's official apt repo and install `docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin`. Create `/etc/docker/daemon.json` (new file) with `{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}`. Add `hossam` (and `deploy`, if created) to the `docker` group.
+3. **Layout** (owner `hossam:hossam`, `.env` mode 600, secrets generated on the server with `openssl rand`):
+   ```
+   /opt/simple-pos/
+     production/   docker-compose.yml, .env (600), releases/<sha>/
+     backups/      daily/ (7), weekly/ (4)
+     qa/<sha>/     Playwright workdir + reports
+   ```
+   The compose project `simple-pos-prod` has these services:
+   - `db`: postgres:16, with volume `simple-pos-prod-db` and no host port
+   - `api`: `127.0.0.1:8120:8000`
+   - `web`: `127.0.0.1:8121:80`
+4. **ACME webroot**: `mkdir -p /var/www/certbot`.
+5. **nginx, phase 1 (HTTP only)**: create **new** files `/etc/nginx/sites-available/cashier.hossam-ameen.online.conf` and `/etc/nginx/sites-available/api.cashier.hossam-ameen.online.conf` and symlink them into `sites-enabled`. Each one contains:
+   ```nginx
+   server {
+       listen 80; listen [::]:80;
+       server_name cashier.hossam-ameen.online;      # api.cashier.hossam-ameen.online in the 2nd file
+       location /.well-known/acme-challenge/ { root /var/www/certbot; }
+       location / { return 301 https://$host$request_uri; }
+   }
+   ```
+   Then run `sudo nginx -t && sudo systemctl reload nginx`. That is a reload, not a restart, and it is skipped if `nginx -t` fails.
+6. **Certificate** (a separate cert name, so existing certs are not touched):
+   `sudo certbot certonly --webroot -w /var/www/certbot --cert-name simple-pos -d cashier.hossam-ameen.online -d api.cashier.hossam-ameen.online --email "$ACME_EMAIL" --agree-tos --no-eff-email --non-interactive --deploy-hook "systemctl reload nginx"`
+   The existing `certbot.timer` handles renewal. Do a dry run first with `certbot renew --cert-name simple-pos --dry-run`.
+7. **nginx, phase 2 (HTTPS)**: append the TLS server blocks to the same two new files, then run `nginx -t` and reload.
+   ```nginx
+   server {
+       listen 443 ssl; listen [::]:443 ssl;   # no http2: on nginx 1.24 it is per-socket and would change the neighbour vhosts
+       server_name cashier.hossam-ameen.online;
+       ssl_certificate     /etc/letsencrypt/live/simple-pos/fullchain.pem;
+       ssl_certificate_key /etc/letsencrypt/live/simple-pos/privkey.pem;
+       include /etc/letsencrypt/options-ssl-nginx.conf;
+       add_header Strict-Transport-Security "max-age=31536000" always;
+       location / {
+           proxy_pass http://127.0.0.1:8121;
+           proxy_set_header Host $host;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto https;
+       }
+   }
+   server {
+       listen 443 ssl; listen [::]:443 ssl;   # no http2: on nginx 1.24 it is per-socket and would change the neighbour vhosts
+       server_name api.cashier.hossam-ameen.online;
+       ssl_certificate     /etc/letsencrypt/live/simple-pos/fullchain.pem;
+       ssl_certificate_key /etc/letsencrypt/live/simple-pos/privkey.pem;
+       include /etc/letsencrypt/options-ssl-nginx.conf;
+       add_header Strict-Transport-Security "max-age=31536000" always;
+       client_max_body_size 10m;
+       location / {
+           proxy_pass http://127.0.0.1:8120;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto https;
+           proxy_read_timeout 60s;
+       }
+   }
+   ```
+   Until the containers exist, both hosts return 502. That is expected and harmless.
+8. **Optional**: install fail2ban with only the default `sshd` jail. It is additive and does not change sshd config.
+9. **Verify after every step**: `curl -sI https://delivery.hossam-ameen.online` returns 200, `https://api.delivery…` still responds, `https://dental.hossam-ameen.online` returns 200, and `certbot certificates` still lists the two existing certs unchanged.
+
+### Will NOT be touched
+- The `delivery*`, `dental*` and `default` nginx sites, `nginx.conf`, and `conf.d/`
+- The existing certs `flash-delivery` and `dental.hossam-ameen.online`, and their renewal configs
+- `flash-backend.service`, `dental-clinic-backend.service`, ports 8000 and 8010, `/srv/flash`, and `/var/www/html`
+- sshd config (no disabling of password or root login, no port change), ufw (stays inactive; GCP firewall is unchanged), and the existing `hossam` sudo setup
+- No `nginx restart` or `systemctl restart`; only `reload` after `nginx -t` passes
+- No Caddy, and no `edge` network
+- The `deploy` user is optional. If it is created, that is additive only.
+
+### Addendum 2026-09-29 (P0-03)
+- Correction: `http2 on;` needs nginx 1.25.1 or later, and the host runs 1.24. `listen ... http2` is a per-socket option, so adding it to the cashier vhosts would also switch it on for the delivery and dental vhosts. HTTP/2 has therefore been left out of the cashier site files.
+- The plan is now implemented as files only, with nothing executed on the server:
+  - `infra/scripts/bootstrap.sh` (Docker step commented out per owner decision)
+  - `infra/nginx/*.conf` and `infra/nginx/bootstrap/*.conf`
+  - `infra/README.md`

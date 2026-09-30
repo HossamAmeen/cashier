@@ -1,12 +1,14 @@
 # Simple POS — User Stories & Acceptance Criteria
 
-> **Owner:** product-analyst · **Version:** 1.0 (Phase 1, task P1-01) · **Date:** 2026-09-28
-> **Sources:** `docs/business/BUSINESS_RULES.md` v1.1 (wins on conflict) · `docs/design/Simple-POS-MVP-UIUX-Proposal.pdf` (34 pages; screens 01–20 on pages 8–27, flows on pages 28–30).
+> **Owner:** product-analyst · **Version:** 1.2 (task P2-03: Gate B decisions OQ-41…OQ-46 applied) · **Date:** 2026-09-29
+> **Sources:** `docs/business/BUSINESS_RULES.md` v1.3 (wins on conflict) · `docs/design/Simple-POS-MVP-UIUX-Proposal.pdf` (34 pages; screens 01–20 on pages 8–27, flows on pages 28–30).
 > **Conventions**
 > - `US-01`…`US-20` map 1:1 to PDF screens 01…20. `US-21`…`US-27` are flows and cross-cutting stories.
 > - Every criterion is written Given/When/Then and cites `BR-*` IDs, plus `AC-*` where an acceptance scenario applies. "→ `CODE`" means the server rejects the request with that BR §9 error code, and the UI shows that code's Arabic message.
 > - Money in examples is in EGP. It is stored as integer minor units (BR-GEN-01), e.g. 45.00 = 4500.
-> - "OQ-n" means the open question in `docs/product/open-questions.md`. Where the default in force for an OQ shapes a criterion, the criterion is tagged `(default OQ-n)` and must be revisited once the owner decides.
+> - "OQ-n" means the open question in `docs/product/open-questions.md`. Where the default in force for an OQ shapes a criterion, the criterion is tagged `(default OQ-n)`. **Gate A was approved on 2026-09-29, and every OQ default was accepted unchanged.** A `(default OQ-n)` tag therefore now cites a binding owner decision (BR §12), not a provisional one.
+> - `US-28` (Settings) and `US-29` (admin shift list) were added in v1.1 for the screens approved in OQ-7 and OQ-12.
+> - v1.2 (Gate B, 2026-09-29) applied OQ-41…OQ-46: length and qty limits (US-08.10, US-10.4, US-11.6a, US-12.3, US-19.2a, US-28.3), `NOT_FOUND` for body ids (US-10.4a, US-11.14a, US-23.8), cross-cashier order reads (US-12.9), `INTERNAL_ERROR` (US-23.9), the offline banner (US-11.20), the icon set (US-08.8) and `FORBIDDEN_ROLE` for cross-cashier filters (US-23.10). No criterion was renumbered.
 > - **Server enforcement:** every business criterion below is enforced by the server (BR-ROLE-05, BR-GEN-03). Hidden or disabled buttons are UX only, and QA must also test the API directly.
 
 ---
@@ -23,10 +25,11 @@
 6. **Given** the login form, **when** the user presses the eye icon, **then** the password toggles between hidden and visible. This is UX only. [PDF p.8]
 7. **Given** the username field, **when** it is rendered, **then** it is labelled "اسم المستخدم" and accepts only a username. It does not accept an email. [BR-AUTH-01, BR §2 User] (default OQ-4)
 8. **Given** the login is case-insensitive on username, **when** `Ahmed.Cashier` is entered, **then** it matches `ahmed.cashier`. [BR §2 User]
+9. **Given** "تذكرني على هذا الجهاز" is checked, **when** login succeeds, **then** the session persists for 7 days across browser restarts. **Given** it is unchecked, **then** the session ends when the browser closes. In both cases, disabling the user revokes the session immediately. [BR-AUTH-02] (OQ-6)
+10. **Given** "نسيت كلمة المرور؟", **when** it is pressed, **then** the static hint "تواصل مع مدير النظام" is shown and no request is sent. [BR-USR-01] (OQ-5)
 
 **Out of scope / notes**
-- Self-service password reset. The "نسيت كلمة المرور؟" link shows a static hint to contact the admin (default OQ-5).
-- The meaning of "تذكرني على هذا الجهاز" is pending (OQ-6).
+- Self-service password reset (OQ-5).
 - There is no SSO and no email login.
 
 ---
@@ -46,6 +49,7 @@
 4. **Given** the KPI rule, **when** an order is CANCELLED, **then** it does not change sales or orders_count. [BR-SHIFT-05; AC-06]
 5. **Given** the action "الطاولات", **when** it is pressed, **then** screen 06 opens. "الطلبات الحالية" opens the list of this cashier's OPEN orders. Each card in "الطلبات الجارية" shows `#number`, table (or "سفري"), item count (Σ qty), and total, and opens screen 12. "إغلاق الوردية" opens screen 05. [BR-TBL-04, BR-ORD-10; PDF p.9]
 6. **Given** an ADMIN, **when** they request the cashier dashboard, **then** they are routed to screen 20 instead. [BR-AUTH-04]
+7. **Given** a cashier with an OPEN shift, **when** they press "طلب سفري" on screen 02, **then** screen 11 opens in TAKEAWAY mode with no table. [BR-ORD-04] (OQ-17)
 
 **Out of scope / notes:** charts; KPIs for other cashiers.
 
@@ -77,8 +81,9 @@
 3. **Given** a CASH order with total 300.00 where 350.00 was received, **when** totals are computed, **then** `cash_total` grows by 300.00. The amount received does not count. [BR-SHIFT-05]
 4. **Given** the shift's recent-orders table, **when** it renders, **then** each row shows the number, table or "سفري", total, status badge (OPEN "مفتوح", PAID "مدفوع", CANCELLED "ملغي"), payment method ("—" if unpaid) and time (Cairo). Pressing a row opens screen 12. [BR-GEN-02, BR-ORD-10]
 5. **Given** "عرض الطلبات", **when** it is pressed, **then** screen 15 opens filtered to this shift. "إغلاق الوردية" opens screen 05. [PDF p.11]
-6. **Given** a cashier, **when** they request another cashier's shift, **then** → `FORBIDDEN_ROLE` (or not-found; see OQ-40). [BR-ROLE-04]
-7. **Given** no OPEN shift, **when** the cashier opens "الورديات", **then** they are sent to screen 03. [BR-SHIFT-03] (default OQ-12)
+6. **Given** a cashier, **when** they request another cashier's shift via the API, **then** → `FORBIDDEN_ROLE` (403). A shift id that does not exist → `NOT_FOUND` (404). [BR-ROLE-04, BR-ROLE-05, BR §9]
+7. **Given** no OPEN shift, **when** the cashier opens "الورديات", **then** they are sent to screen 03. With an OPEN shift, "الورديات" opens screen 04. The cashier UI never lists past shifts. [BR-SHIFT-03] (OQ-12 (a))
+8. **Given** a cashier, **when** they call the API to read one of their own CLOSED shifts, **then** it is returned. [BR-ROLE-04] (OQ-12 (a))
 
 **Out of scope / notes:** charts beyond the single split bar.
 
@@ -143,14 +148,17 @@
 
 **Acceptance criteria**
 1. **Given** categories exist, **when** screen 08 loads, **then** each card shows the name, item count, "الترتيب في شاشة الطلب" (`sort_order`), status (مفعّل/معطّل), and the actions تعديل / حذف. [BR §2 Category, BR-ITEM-06]
-2. **Given** "إضافة تصنيف", **when** the admin submits a name, sort_order (integer) and status, **then** the category is created. A duplicate name → rejected (`VALIDATION_ERROR` with a field detail; default OQ-40). [BR §2 Category, BR-ROLE-01]
+2. **Given** "إضافة تصنيف", **when** the admin submits a name, sort_order (integer) and status, **then** the category is created. A duplicate name → `DUPLICATE_VALUE` (409). [BR §2 Category, BR-ROLE-01, BR §9] (OQ-40 (a))
 3. **Given** a category that contains ≥ 1 item (any status), **when** delete is confirmed, **then** → `CATEGORY_NOT_EMPTY` (409). The warning "لا يمكن حذف تصنيف يحتوي على أصناف؛ انقل الأصناف أو عطّل التصنيف بدلًا من حذفه" is shown. [BR-ITEM-05; AC-10]
 4. **Given** a category with 0 items, **when** delete is confirmed in the confirm dialog, **then** the category is removed. [BR-ITEM-05]
 5. **Given** a category is set DISABLED, **when** a cashier loads screen 11, **then** neither the category nor any of its items appear. Adding one of its items via the API → `ITEM_INACTIVE`. [BR-ITEM-05, BR-ITEM-01; AC-10]
 6. **Given** categories with sort_order 1, 2, 2, **when** shown on screen 11, **then** they are ordered by sort_order ascending, then by name ascending. [BR-ITEM-06]
 7. **Given** a CASHIER, **when** they call any category mutation, **then** → `FORBIDDEN_ROLE`. [BR-ROLE-01, BR-ROLE-05]
+8. **Given** the add/edit category dialog, **when** the admin picks an icon from the fixed built-in set or leaves it empty, **then** the category is saved with that `icon` (or null). An icon key outside the set → `VALIDATION_ERROR`. The set is exactly the 20 keys listed in BR-ITEM-07. [BR-ITEM-07, BR §2 Category] (OQ-33 (a), OQ-43)
+10. **Given** a category name that is empty or longer than 50 characters, **when** saved, **then** → `VALIDATION_ERROR` (422). [BR §2 Category] (OQ-41)
+9. **Given** a category with an icon, **when** its items are shown on screens 09, 11 and 12, **then** each item shows the category's icon. A category with a null icon shows the generic icon. [BR-ITEM-07]
 
-**Out of scope / notes:** category images. Icons follow default OQ-33.
+**Out of scope / notes:** category or item image upload (BR-ITEM-07); per-item icons.
 
 ---
 
@@ -174,8 +182,9 @@
 **Acceptance criteria**
 1. **Given** the form, **when** the name, category or price is missing, or the price is ≤ 0, **then** "حفظ" stays disabled. If the API is called anyway → `VALIDATION_ERROR`. [BR-ITEM-02]
 2. **Given** a price input "45.5" or "45.50", **when** it is saved, **then** `price_minor` = 4550. Input with more than 2 decimals (e.g. "45.505") → `VALIDATION_ERROR`. [BR-ITEM-02, BR-GEN-01]
-3. **Given** a name that already exists in the same category, **when** saved, **then** it is rejected (`VALIDATION_ERROR`, default OQ-40). The same name in a *different* category is allowed. [BR §2 Item]
-4. **Given** a description of more than 500 characters, **when** saved, **then** → `VALIDATION_ERROR`. [BR §2 Item]
+3. **Given** a name that already exists in the same category, **when** saved, **then** → `DUPLICATE_VALUE` (409). The same name in a *different* category is allowed. [BR §2 Item, BR §9] (OQ-40 (a))
+4. **Given** a description of more than 500 characters, or a name longer than 80 characters, **when** saved, **then** → `VALIDATION_ERROR`. [BR §2 Item] (OQ-41)
+4a. **Given** a `category_id` that does not exist, **when** the item is saved, **then** → `NOT_FOUND` (404). [BR §9] (OQ-44)
 5. **Given** the live preview, **when** fields change, **then** the preview card shows the name and price as they will appear on screen 11. This is UX only. [PDF p.17]
 6. **Given** Cappuccino priced 45.00 is in an OPEN order and a PAID order, **when** the admin changes the price to 50.00, **then** the existing lines still show 45.00, and new lines added afterwards use 50.00. [BR-ITEM-03; AC-09]
 7. **Given** the status toggle is set to disabled, **when** saved, **then** the item is hidden from the order screen and still appears in past orders (info note on the form). [BR-ITEM-01, BR-ITEM-03]
@@ -193,6 +202,7 @@
 4. **Given** a line "Cappuccino, note 'بدون سكر'", **when** Cappuccino is tapped again with no note, **then** a separate line is created. [BR-ORD-05]
 5. **Given** a line with qty 1, **when** "−" is pressed, **then** the line is removed (qty never goes below 1). The trash icon also removes the line. [BR-ORD-02]
 6. **Given** a note longer than 140 characters, **when** it is entered, **then** it is rejected (`VALIDATION_ERROR`). [BR §2 OrderLine]
+6a. **Given** a line with qty 999, **when** "+" is pressed, **then** the qty stays 999. A request with qty > 999 (or < 1, or non-integer) → `VALIDATION_ERROR`. [BR-ORD-02] (OQ-41)
 7. **Given** the AC-01 cart (Cappuccino 45.00 × 2, Beef burger 120.00 × 1, Cheesecake 65.00 × 1, Orange juice 40.00 × 1), **when** a 15.00 discount is applied, **then** the preview shows subtotal 315.00, discount −15.00 and total 300.00. After confirmation the server response has the same values. [BR-ORD-06, BR-ORD-07, BR-GEN-03; AC-01]
 8. **Given** the discount editor offers a percentage, **when** 10% of 315.00 is chosen, **then** the client sends a fixed amount of 31.50 (3150 minor, half-up). The server only ever receives an amount. [BR-ORD-07]
 9. **Given** a discount > subtotal or < 0, **when** submitted, **then** → `DISCOUNT_INVALID` (422). [BR-ORD-07]
@@ -201,12 +211,13 @@
 12. **Given** a TAKEAWAY order ("سفري"), **when** it is confirmed, **then** `table_id` is null. Sending a table_id with TAKEAWAY, or omitting it with DINE_IN → `VALIDATION_ERROR`. [BR-ORD-04, BR §2 Order]
 13. **Given** the table became occupied after screen 11 opened, **when** confirm is sent, **then** → `TABLE_OCCUPIED`, and the cart is kept client-side. [BR-TBL-02, BR-TBL-03; AC-04]
 14. **Given** an inactive table, **when** a DINE_IN confirm targets it, **then** → `TABLE_INACTIVE`. [BR-TBL-03, BR-TBL-06]
+14a. **Given** a `table_id` or `item_id` that does not exist, **when** confirm or edit is sent, **then** → `NOT_FOUND` (404), and no order is created or changed. [BR §9] (OQ-44)
 15. **Given** an item was disabled after it was put in the cart, **when** confirm is sent, **then** → `ITEM_INACTIVE`, and no order is created. [BR-ITEM-01; AC-10] (default OQ-22)
 16. **Given** no OPEN shift, **when** confirm is sent, **then** → `NO_OPEN_SHIFT`. [BR-SHIFT-03; AC-03]
 17. **Given** edit mode on an OPEN order owned by the caller, **when** lines, quantities, notes or the discount change and "تأكيد الطلب" is pressed, **then** the server applies the changes, recomputes the totals, and keeps the existing lines' price snapshots. New lines use the current price. [BR-ORD-08, BR-ITEM-03, BR-ORD-06; AC-09] (merge with a differing snapshot: default OQ-21)
 18. **Given** edit mode, **when** the edit removes every line, **then** → `ORDER_EMPTY`. Cancelling the order is a separate action (US-12). [BR-ORD-02]
 19. **Given** an ADMIN, **when** they call create or edit order, **then** → `FORBIDDEN_ROLE`. [BR-ROLE-02; AC-11]
-20. **Given** the network is unavailable, **when** the cashier presses confirm, **then** no order is queued offline. The UI shows an error and keeps the cart. [BR §0 (offline order creation out of scope)]
+20. **Given** the network is unavailable, **when** the cashier presses confirm, **then** no order is queued offline. The UI shows the banner "لا يوجد اتصال بالإنترنت — لا يمكن تنفيذ العمليات حتى يعود الاتصال" and keeps the cart. [BR §0, BR §9 (UI-only message)] (OQ-42)
 
 **Out of scope / notes:** modifiers and variants; kitchen tickets; splitting the bill; offline creation.
 
@@ -218,13 +229,13 @@
 **Acceptance criteria**
 1. **Given** order #1048, **when** screen 12 loads, **then** it shows: the number, table (or "سفري"), cashier, `created_at` (Cairo, `DD/MM/YYYY · HH:mm`), status badge, and lines (name snapshot, qty, unit price snapshot, line total, note). It also shows subtotal ("الإجمالي" 315.00), discount (−15.00) and "الإجمالي النهائي" (300.00). [BR-ORD-06, BR-ITEM-03, BR-GEN-02]
 2. **Given** an OPEN order owned by the caller, **when** screen 12 renders, **then** "دفع الطلب" (to 13), "تعديل الطلب" (to 11 edit) and "إلغاء الطلب" are shown. [BR-ORD-08, BR-ROLE-03]
-3. **Given** "إلغاء الطلب", **when** pressed, **then** a confirm dialog asks for a reason (required, ≥ 3 characters after trimming). A reason under 3 characters → `VALIDATION_ERROR`. [BR-ORD-09] (the PDF dialog has no reason field; BR wins; see G-12)
+3. **Given** "إلغاء الطلب", **when** pressed, **then** the confirm dialog includes a required text field "سبب الإلغاء". The confirm button stays disabled until the trimmed reason is 3–200 characters. The server rejects a missing reason, or a trimmed reason under 3 or over 200 characters, with `VALIDATION_ERROR` (422) (OQ-41). [BR-ORD-09, BR §9] (the PDF dialog lacks this field; BR-ORD-09 wins, confirmed at Gate A: G-12, OQ-40 (a))
 4. **Given** a valid reason and confirmation, **when** the server cancels the order, **then** the status becomes CANCELLED and `cancelled_at` and `cancel_reason` are stored. The table becomes AVAILABLE. The order stays in history as "ملغي", and it is excluded from shift totals. [BR-ORD-09, BR-TBL-05, BR-SHIFT-05; AC-06]
 5. **Given** a PAID or CANCELLED order, **when** screen 12 renders, **then** the edit, cancel and pay buttons are absent. Any edit or cancel API call → `ORDER_NOT_EDITABLE` (409). [BR-ORD-08; AC-05]
 6. **Given** a PAID order, **when** screen 12 renders, **then** it also shows the payment method, `paid_at`, and for CASH the amount received and change. A CANCELLED order shows `cancelled_at` and the reason. (Content default: G-19.) [BR §2 Payment, BR-ORD-09]
 7. **Given** another cashier's order, **when** a cashier opens it, **then** it is read-only. Any mutation → `NOT_ORDER_OWNER`. [BR-ROLE-06; AC-11]
 8. **Given** an ADMIN, **when** they open any order, **then** it is read-only ("عرض فقط"). Any mutation → `FORBIDDEN_ROLE`. [BR-ROLE-01, BR-ROLE-02; AC-11]
-9. **Given** a cashier, **when** they request an order they do not own via history, **then** it is not listed for them (BR-ROLE-04). Direct access to *another cashier's* order is allowed only read-only through the tables flow (BR-ROLE-06). [BR-ROLE-04, BR-ROLE-06] (see OQ-11)
+9. **Given** a cashier, **when** they request an order they do not own via history, **then** it is not listed for them (BR-ROLE-04). **When** they read another cashier's order by id, **then** it is returned read-only only while its status is OPEN; if it is PAID or CANCELLED → `FORBIDDEN_ROLE` (403). [BR-ROLE-04, BR-ROLE-06] (OQ-11, OQ-45)
 
 ---
 
@@ -238,6 +249,7 @@
 4. **Given** CASH 350.00 on total 300.00, **when** payment is confirmed, **then** one transaction locks the order, verifies it is OPEN and in the caller's OPEN shift, inserts a Payment (`method` CASH, `amount_due` 30000, `amount_received` 35000, `change` 5000, `paid_at` = server time), and sets the order to PAID. Table 5 becomes AVAILABLE. [BR-PAY-01, BR-PAY-02, BR-PAY-04, BR-PAY-05, BR-TBL-05; AC-01]
 5. **Given** method CARD, **when** it is selected, **then** the received field is hidden. The server stores `amount_received` = total and `change` = 0. A request that includes a received amount for CARD → `VALIDATION_ERROR`. [BR-PAY-03; AC-08]
 6. **Given** the same `Idempotency-Key` sent twice (double click or retry), **when** both are processed, **then** exactly one Payment exists and both responses report the same result. [BR-PAY-04; AC-07]
+6a. **Given** an `Idempotency-Key` already used for a payment, **when** it is sent again with a different request body (e.g. CARD instead of CASH, or a different amount received), **then** → `IDEMPOTENCY_CONFLICT` (409), and no second Payment is created. [BR-PAY-04, BR §9] (OQ-40 (a))
 7. **Given** a second payment request with a *different* key on an already PAID order, **when** processed, **then** → `ORDER_NOT_EDITABLE`. [BR-PAY-04, BR-ORD-08; AC-07]
 8. **Given** a payment method other than CASH or CARD, or an attempt at a second or partial payment, **when** submitted, **then** it is rejected (`VALIDATION_ERROR`, or `ORDER_NOT_EDITABLE` if the order is already PAID). [BR-PAY-01]
 9. **Given** another cashier's order, **when** payment is attempted, **then** → `NOT_ORDER_OWNER`. [BR-ROLE-06, BR-PAY-04; AC-11]
@@ -255,8 +267,8 @@
 **Acceptance criteria**
 1. **Given** a successful payment, **when** screen 14 loads, **then** it shows "تم إتمام الطلب بنجاح", "تم تسجيل الدفع وأصبحت طاولة 5 متاحة" (for TAKEAWAY the table phrase is omitted), and the number, total, payment method and `paid_at` time (Cairo). [BR-PAY-05, BR-TBL-05]
 2. **Given** "طباعة الفاتورة", **when** it is pressed, **then** the browser print dialog opens with an 80 mm receipt layout. No printer driver is used. [BR-PAY-06]
-3. **Given** the receipt, **when** it is rendered, **then** it contains: the business name (OQ-2 / OQ-7), the order number, table or "سفري", date and time, lines (name × qty, line total), discount, total, method, and for CASH "مستلم / باقي". No tax lines appear, and the title contains no "ضريبية" wording. [BR-PAY-06; OQ-1] (defaults OQ-8, OQ-9)
-4. **Given** "طلب جديد", **when** it is pressed, **then** screen 11 opens in TAKEAWAY mode. "العودة للطاولات" opens screen 06. [BR-ORD-04; PDF p.21]
+3. **Given** the receipt, **when** it is rendered, **then** its title is exactly "إيصال". In order, it contains: Settings.business_name; the order number; table number or "سفري"; paid date and time (Cairo); cashier name; lines (name snapshot × qty, line total); subtotal; discount; total; payment method; for CASH "مستلم" and "باقي"; and Settings.receipt_footer (seeded "شكرًا لزيارتكم"). No tax line appears, and neither "ضريبية" nor "ضريبة" appears anywhere on it. No logo appears. [BR-PAY-06, BR-PAY-07, BR-SET-01, BR-SET-03] (OQ-1, OQ-8 (a), OQ-9)
+4. **Given** "طلب جديد", **when** it is pressed, **then** screen 11 opens in TAKEAWAY mode. "العودة للطاولات" opens screen 06. [BR-ORD-04; PDF p.21] (takeaway entry points are 02, 06 and 14: OQ-17)
 5. **Given** screen 14 is refreshed, **when** it reloads, **then** it shows the stored payment data from the server and does not re-submit payment. [BR-PAY-04, BR-GEN-03]
 
 **Out of scope / notes:** auto-print; email or SMS receipts; reprint from history (default OQ-10: not in MVP).
@@ -295,9 +307,9 @@
 **Screens:** 17 Cashier Details (PDF p.24).
 
 **Acceptance criteria**
-1. **Given** cashier Ahmed, **when** screen 17 loads, **then** it shows the name, username, status, role and date added. If a shift is OPEN, it also shows that shift's start and live `orders_count · sales_total`. [BR-SHIFT-05, BR §2 User] (created date: G-24)
+1. **Given** cashier Ahmed, **when** screen 17 loads, **then** it shows the name, username, status, role and date added (= the user's `created_at`, Cairo date). If a shift is OPEN, it also shows that shift's start and live `orders_count · sales_total`. [BR-SHIFT-05, BR §2 (created_at)] (OQ-35)
 2. **Given** shift history, **when** it renders, **then** each row shows the shift code, date, start, end ("جارية" if OPEN), `orders_count`, `sales_total` and `difference`: green "+5.00", green "0.00", red "−10.00", or the badge "مفتوحة" if OPEN. Values for CLOSED shifts come from the stored snapshot. [BR-SHIFT-05, BR-SHIFT-07, BR-SHIFT-08] (shift code and default range: OQ-35)
-3. **Given** a shift row, **when** it is pressed, **then** the read-only shift summary opens (opening balance, sales, cash, card, expected, counted, difference). [BR-SHIFT-08] (screen: default OQ-12)
+3. **Given** a shift row, **when** it is pressed, **then** the closed-shift summary opens in the screen 05 layout, read-only (opening balance, sales, cash, card, expected, counted, difference), with no inputs and no close action. [BR-SHIFT-08] (OQ-12 (a))
 4. **Given** "تعديل", **when** it is pressed, **then** screen 19 opens. "تعطيل" follows the rules in US-16.3–4. [BR-USR-03]
 5. **Given** a CLOSED shift, **when** item prices later change, **then** its stored totals are unchanged. [BR-SHIFT-08, BR-ITEM-03]
 
@@ -310,7 +322,7 @@
 1. **Given** users exist, **when** screen 18 loads, **then** it lists all users with the name, username, role badge, status and last login. The tabs "الكل / مدير / كاشير" show counts, and search matches name or username. [BR-ROLE-01]
 2. **Given** any user, **when** the admin looks for a delete action, **then** none exists, and no delete endpoint exists. Users can only be disabled. [BR-USR-02, BR-GEN-04]
 3. **Given** the only ACTIVE ADMIN, **when** anyone tries to disable them, **then** → `LAST_ADMIN` (409). [BR-USR-04; AC-12]
-4. **Given** a user is disabled, **when** they next call any API with an existing session, **then** the request is rejected as unauthenticated (their sessions were revoked), and login → `USER_DISABLED`. [BR-AUTH-02; AC-12]
+4. **Given** a user is disabled, **when** they next call any API with an existing session, **then** → `UNAUTHENTICATED` (401) (their sessions were revoked), and login → `USER_DISABLED`. [BR-AUTH-02, BR §9; AC-12]
 5. **Given** a DISABLED user, **when** the admin re-enables them, **then** the status becomes ACTIVE and they can log in again. [BR §10 User]
 6. **Given** a CASHIER, **when** they call `/users`, **then** → `FORBIDDEN_ROLE`. [BR-ROLE-01, BR-ROLE-05; AC-11]
 
@@ -321,7 +333,8 @@
 
 **Acceptance criteria**
 1. **Given** add mode, **when** the name, username, password (≥ 8 characters) and role are provided, **then** the user is created. The password is stored only as an argon2id/bcrypt hash and is never returned by any API. [BR-USR-01, BR §2 User]
-2. **Given** a username not matching `[a-z0-9._]{3,32}` (after lower-casing), or one equal case-insensitively to an existing username, **when** saved, **then** it is rejected (`VALIDATION_ERROR`; default OQ-40). [BR §2 User]
+2. **Given** a username not matching `[a-z0-9._]{3,32}` (after lower-casing), **when** saved, **then** → `VALIDATION_ERROR` (422). **Given** a username equal case-insensitively to an existing one, **when** saved, **then** → `DUPLICATE_VALUE` (409). [BR §2 User, BR §9] (OQ-40 (a))
+2a. **Given** a name that is empty or longer than 100 characters, **when** saved, **then** → `VALIDATION_ERROR` (422). [BR §2 User] (OQ-41)
 3. **Given** edit mode, **when** the password field is left empty, **then** the password is unchanged. When a value is entered, it must be ≥ 8 characters. [BR-USR-01]
 4. **Given** the role cards "مدير / كاشير" with permission descriptions, **when** the role of a user with an OPEN shift is changed, **then** → `USER_HAS_OPEN_SHIFT`. [BR-USR-05]
 5. **Given** the last ACTIVE ADMIN, **when** edited to role CASHIER or status DISABLED, **then** → `LAST_ADMIN`. [BR-USR-04; AC-12]
@@ -356,7 +369,7 @@
 **Screens:** 06 Tables (admin variant: "إضافة طاولة", table edit) (PDF p.13).
 
 **Acceptance criteria**
-1. **Given** "إضافة طاولة", **when** a positive integer number not already used is submitted, **then** the table is created as active. A duplicate or non-positive number → rejected (`VALIDATION_ERROR`; default OQ-40). [BR-TBL-06, BR §2 Table]
+1. **Given** "إضافة طاولة", **when** a positive integer number not already used is submitted, **then** the table is created as active. A number already in use → `DUPLICATE_VALUE` (409). A non-positive or non-integer number → `VALIDATION_ERROR` (422). [BR-TBL-06, BR §2 Table, BR §9] (OQ-40 (a))
 2. **Given** an AVAILABLE table, **when** the admin renumbers it to an unused number, or deactivates it, **then** the change is saved. Inactive tables disappear from the cashier grid and cannot receive orders (`TABLE_INACTIVE`). [BR-TBL-06, BR-TBL-03]
 3. **Given** an OCCUPIED table, **when** the admin tries to deactivate or renumber it, **then** → `TABLE_OCCUPIED`. [BR-TBL-06]
 4. **Given** a table referenced by any order, **when** deletion is attempted, **then** it is not possible. Deactivation is the only removal path in the MVP. [BR-GEN-04] (default OQ-32: no delete at all)
@@ -386,8 +399,11 @@
 3. **Given** cashier B, **when** mutating cashier A's order (edit, cancel, pay), **then** → `NOT_ORDER_OWNER`. [BR-ROLE-06; AC-11]
 4. **Given** a CASHIER, **when** listing orders or shifts, **then** only their own are returned. [BR-ROLE-04]
 5. **Given** a CASHIER, **when** closing a shift that is not theirs, **then** it is rejected. [BR-ROLE-03]
-6. **Given** navigation, **when** a CASHIER is logged in, **then** the sidebar shows exactly الرئيسية, الطاولات, الطلبات, الورديات and الحساب. An ADMIN sees الرئيسية, الكاشير, المستخدمون, الطاولات, الأصناف, الطلبات, الورديات and الإعدادات. The admin never sees Create Order. [BR-ROLE-01..03; PDF p.5] (الحساب: OQ-13; الإعدادات: OQ-7; الورديات: OQ-12)
-7. **Given** no or expired authentication, **when** calling any endpoint except login, **then** it is rejected as unauthenticated. [BR-ROLE-05] (error code: OQ-40)
+6. **Given** navigation, **when** a CASHIER is logged in, **then** the sidebar shows exactly الرئيسية, الطاولات, الطلبات, الورديات and الحساب. An ADMIN sees الرئيسية, الكاشير, المستخدمون, الطاولات, الأصناف, الطلبات, الورديات and الإعدادات. The admin never sees Create Order. [BR-ROLE-01..03; PDF p.5] (الحساب: OQ-13 → US-27; الإعدادات: OQ-7 → US-28; admin الورديات: OQ-12 → US-29; cashier الورديات → 04 or 03, US-04.7)
+7. **Given** a missing, invalid, expired or revoked session, **when** calling any endpoint except login, **then** → `UNAUTHENTICATED` (401), and the UI returns to screen 01 with "انتهت الجلسة، سجّل الدخول مرة أخرى". [BR-ROLE-05, BR-GEN-06, BR §9] (OQ-40 (a))
+8. **Given** an authenticated caller allowed to use an endpoint, **when** they reference an id that does not exist (order, shift, user, table, category, item), in the URL path or in the request body, **then** → `NOT_FOUND` (404) with "العنصر غير موجود". [BR-GEN-06, BR §9] (OQ-40 (a), OQ-44)
+9. **Given** an unexpected server failure, **when** any endpoint fails, **then** → `INTERNAL_ERROR` (500) with "حدث خطأ غير متوقع، حاول مرة أخرى". No stack trace or internal detail is returned. [BR §9] (OQ-42)
+10. **Given** a CASHIER, **when** they read another cashier's shift, or filter orders or shifts by another cashier's `cashier_id` or `shift_id`, **then** → `FORBIDDEN_ROLE`. [BR-ROLE-04] (OQ-46)
 
 ---
 
@@ -437,7 +453,36 @@
 1. **Given** a CASHIER, **when** any screen renders, **then** the header shows the shift status pill ("الوردية مفتوحة · منذ 08:00 ص" or "لا توجد وردية مفتوحة"), today's date in Arabic with Western digits (e.g. "السبت 26 سبتمبر 2026"), and the user's name and role. [BR-GEN-02, BR-GEN-05]
 2. **Given** an ADMIN, **when** any screen renders, **then** the header shows the open-shifts count pill. [PDF p.15–27]
 3. **Given** the logout icon, **when** pressed, **then** the session is ended. An OPEN shift stays OPEN and is resumed at the next login. [BR-SHIFT-08 (only close ends a shift)] (default OQ-29)
-4. **Given** the cashier menu item "الحساب", **when** pressed, **then** a read-only profile (name, username, role) with logout is shown. [default OQ-13]
+4. **Given** the cashier menu item "الحساب", **when** pressed, **then** a read-only profile (name, username, role) with logout is shown. There is no password-change control. [default OQ-13]
+
+---
+
+## US-28 — As an admin, I want to edit the business name and receipt footer so that printed receipts carry the correct business identity.
+**Screens:** "الإعدادات" (admin nav, PDF p.5). There is no drawn screen in 01–20; it uses the standard form layout of screens 10/19 (OQ-7 (a)).
+
+**Acceptance criteria**
+1. **Given** an ADMIN, **when** "الإعدادات" loads, **then** it shows exactly two editable fields: "اسم النشاط" (business_name) and "نص تذييل الإيصال" (receipt_footer), plus a read-only currency line "العملة: جنيه مصري (ج.م)". [BR-SET-01, BR-SET-03]
+2. **Given** a fresh installation, **when** Settings are read, **then** exactly one Settings record exists and receipt_footer = "شكرًا لزيارتكم". There is no create or delete endpoint. [BR-SET-01]
+3. **Given** an empty or whitespace-only business_name, or one longer than 80 characters after trimming, **when** saved, **then** → `VALIDATION_ERROR` (422). An empty receipt_footer is accepted; one longer than 200 characters → `VALIDATION_ERROR`. [BR-SET-01] (OQ-41)
+4. **Given** valid values, **when** "حفظ" is pressed, **then** they are stored, and the next receipt printed on screen 14 shows the new business_name and footer. [BR-SET-01, BR-PAY-07]
+5. **Given** a CASHIER, **when** they call the Settings update endpoint, **then** → `FORBIDDEN_ROLE` (403). **When** they read Settings, **then** the values are returned. [BR-SET-02, BR-ROLE-05]
+6. **Given** the Settings read and update schemas, **when** inspected, **then** they contain only business_name and receipt_footer. No currency field and no logo or file-upload field exist. Every displayed amount keeps the label ج.م. [BR-SET-03, BR-GEN-01]
+
+**Out of scope / notes:** logo upload; configurable currency; tax settings (OQ-1); multiple branches (BR §0).
+
+---
+
+## US-29 — As an admin, I want a list of all shifts across cashiers so that I can review any shift's reconciliation.
+**Screens:** admin "الورديات" (PDF p.5). It reuses the shift-history table of screen 17 (PDF p.24) and the read-only screen 05 layout (PDF p.12) for the summary (OQ-12 (a)).
+
+**Acceptance criteria**
+1. **Given** an ADMIN, **when** "الورديات" loads, **then** it lists the shifts of all cashiers, newest `opened_at` first and paginated. Each row uses the columns of screen 17's history table plus the cashier name: shift code ("SH-" + id zero-padded to 4), date, start, end ("جارية" if OPEN), `orders_count`, `sales_total`, and `difference` (or the badge "مفتوحة"). [BR-ROLE-01, BR-SHIFT-05, BR-SHIFT-07, BR-SHIFT-08] (OQ-35)
+2. **Given** the cashier filter, **when** a cashier is chosen, **then** only that cashier's shifts are listed. [BR-ROLE-01]
+3. **Given** a CLOSED shift row, **when** it is pressed, **then** the read-only screen 05 layout shows the stored snapshot values (opening balance, sales, cash, card, expected, counted, difference) with no inputs. [BR-SHIFT-08]
+4. **Given** an OPEN shift row, **when** it is pressed, **then** its live totals are shown read-only. No admin action closes it. [BR-ROLE-02, BR-SHIFT-05] (OQ-3)
+5. **Given** a CASHIER, **when** they call the all-shifts list, **then** only their own shifts are returned (BR-ROLE-04). The cashier UI has no shift-list screen (US-04.7). [BR-ROLE-04] (OQ-12 (a))
+
+**Out of scope / notes:** admin force-close (OQ-3); shift report printing; exports.
 
 ---
 
@@ -452,11 +497,11 @@
 | BR-GEN-04 | US-09, US-18, US-21, US-26 |
 | BR-GEN-05 | US-25, US-27 |
 | BR-GEN-06 | US-01, US-25 |
-| BR-ROLE-01 | US-06, US-08, US-09, US-12, US-15, US-16, US-18, US-20, US-21, US-23 |
-| BR-ROLE-02 | US-03, US-05, US-06, US-11, US-12, US-13, US-21, US-23 |
+| BR-ROLE-01 | US-06, US-08, US-09, US-12, US-15, US-16, US-18, US-20, US-21, US-23, US-29 |
+| BR-ROLE-02 | US-03, US-05, US-06, US-11, US-12, US-13, US-21, US-23, US-29 |
 | BR-ROLE-03 | US-05, US-12, US-23 |
-| BR-ROLE-04 | US-04, US-12, US-15, US-23 |
-| BR-ROLE-05 | US-03, US-08, US-15, US-18, US-20, US-23 |
+| BR-ROLE-04 | US-04, US-12, US-15, US-23, US-29 |
+| BR-ROLE-05 | US-03, US-04, US-08, US-15, US-18, US-20, US-23, US-28 |
 | BR-ROLE-06 | US-06, US-07, US-12, US-13, US-23 |
 | BR-AUTH-01 | US-01 |
 | BR-AUTH-02 | US-01, US-16, US-18 |
@@ -489,6 +534,10 @@
 | BR-ITEM-04 | US-09 |
 | BR-ITEM-05 | US-08 |
 | BR-ITEM-06 | US-08, US-11 |
+| BR-ITEM-07 | US-08 |
+| BR-SET-01 | US-14, US-28 |
+| BR-SET-02 | US-28 |
+| BR-SET-03 | US-14, US-28 |
 | BR-ORD-01 | US-11 |
 | BR-ORD-02 | US-11 |
 | BR-ORD-03 | US-11 |
@@ -505,12 +554,13 @@
 | BR-PAY-04 | US-13, US-14, US-24 |
 | BR-PAY-05 | US-13, US-14, US-22 |
 | BR-PAY-06 | US-14 |
-| BR §0 Scope (out-of-scope list) | US-11, US-15, US-20 (negative criteria) |
-| BR §2 Entities (field constraints) | US-01, US-08, US-10, US-11, US-16, US-19, US-21 |
-| BR §9 Error codes (all 20) | US-25.4 (message mapping); each code is exercised in at least one story. `TABLE_INACTIVE`: US-11, US-21. `VALIDATION_ERROR`: US-03, US-10, US-11, US-19 |
+| BR-PAY-07 | US-14, US-28 |
+| BR §0 Scope (out-of-scope list) | US-11, US-15, US-20, US-28 (negative criteria) |
+| BR §2 Entities (field constraints, Settings, Category icon, created_at) | US-01, US-08, US-10, US-11, US-16, US-17, US-19, US-21, US-28 |
+| BR §9 Error codes (all 25) + UI-only offline banner | US-25.4 (message mapping); each code is exercised in at least one story. `TABLE_INACTIVE`: US-11, US-21. `VALIDATION_ERROR`: US-03, US-08, US-10, US-11, US-12, US-19, US-28. `UNAUTHENTICATED`: US-18, US-23. `NOT_FOUND`: US-04, US-10, US-11, US-23. `INTERNAL_ERROR`: US-23.9. Offline banner: US-11.20. `DUPLICATE_VALUE`: US-08, US-10, US-19, US-21. `IDEMPOTENCY_CONFLICT`: US-13 |
 | BR §10 State machines | Shift: US-03/05 · Order: US-11/12/13 · Table: US-06 · User: US-18 |
 
-**Unmapped BR IDs: none.** Every BR-* ID in v1.1 has ≥ 1 story.
+**Unmapped BR IDs: none.** Every BR-* ID in v1.3 has ≥ 1 story.
 
 ### B. Acceptance scenarios → user stories
 | AC | Covered by |
@@ -559,9 +609,11 @@
 | Flow / scenario | 28–30 | US-22 |
 | Design system / UX guidelines | 6, 32 | US-25 |
 | Navigation | 5 | US-23, US-27 |
+| Admin "الإعدادات" (not drawn; OQ-7) | 5 | US-28 |
+| Admin "الورديات" (not drawn; reuses 17 and 05; OQ-12) | 5, 12, 24 | US-29 |
 
-**Unmapped screens: none.** Several UI elements, however, have **no screen in 01–20 and no business rule**. They are flagged, not covered:
-- ⚠ Admin **الإعدادات / Settings** (PDF p.5). No screen and no BR entity. → OQ-7 (with OQ-2)
-- ⚠ Cashier **الحساب / Account** (PDF p.5). No screen. → OQ-13
-- ⚠ **Shift history list / shift summary detail** (admin "الورديات" nav, screen 17 row action, BR §0 "shift history"). No screen. → OQ-12
-- ⚠ **Admin table add/edit form** (screen 06 mentions it but it is not drawn). Covered by US-21 as a dialog on 06.
+**Unmapped screens: none.** The UI elements that have no drawn screen in 01–20 were resolved at Gate A (2026-09-29):
+- Admin **الإعدادات / Settings** (PDF p.5) → US-28 (OQ-7 (a), OQ-2; BR-SET-01..03)
+- Cashier **الحساب / Account** (PDF p.5) → US-27.4 (OQ-13)
+- **Shift history list / closed-shift summary** (admin "الورديات" nav, screen 17 row action, BR §0 "shift history") → US-29, US-17.3 (OQ-12 (a))
+- **Admin table add/edit form** (mentioned on screen 06, not drawn) → US-21, as a dialog on 06 (OQ-32)

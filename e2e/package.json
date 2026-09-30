@@ -1,0 +1,16 @@
+{
+  "name": "e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.54.2",
+    "@types/node": "^22.16.0",
+    "typescript": "~5.8.3"
+  }
+}

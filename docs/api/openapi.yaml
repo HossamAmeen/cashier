@@ -1,0 +1,4102 @@
+# Simple POS — API contract (contract-first, ADR-0008). Owner: team-lead. Reviewed by: product-analyst.
+# Status: APPROVED at GATE B (2026-09-29); P2-04 applied docs/api/contract-review.md. Rank 2 (CLAUDE.md §2).
+# Do not edit from backend/frontend roles; propose changes to the team-lead.
+openapi: 3.0.3
+info:
+  title: Simple POS API
+  version: 1.0.0
+  description: |-
+    Contract-first API for Simple POS (ADR-0008). Precedence: BUSINESS_RULES.md (BR v1.2) > this file > the UI/UX PDF > code.
+
+    **Hosts**: API `https://api.cashier.hossam-ameen.online`, PWA `https://cashier.hossam-ameen.online` (separate origins,
+    CORS limited to the PWA origin, ADR-0003).
+
+    **Conventions** (ADR-0005, 0008, 0010, 0013)
+    - Paths have no trailing slash. JSON is snake_case. Ids are integers. Timestamps are RFC 3339 UTC.
+    - **Money is always an integer number of minor units (piastres) in a field ending in `_minor`** (BR-GEN-01). The server
+      computes every total, change, expected cash and difference (BR-GEN-03).
+    - Success body: `{success: true, message, data}`; lists: `data = {items, pagination, …}`; 204 has no body.
+    - Error body: `{success: false, code, message, details}`; `code` is a BR §9 code with its BR §9 HTTP status and Arabic
+      `message` (BR-GEN-06).
+    - Auth: `Authorization: Bearer <access_token>` (15 min). The refresh token is an httpOnly cookie on the API host only,
+      used by `/api/auth/refresh` and `/api/auth/logout` with `X-Requested-With: simple-pos` (ADR-0003, ADR-0011).
+    - `x-roles` lists the roles allowed to call each operation (`PUBLIC`, `ANY_AUTHENTICATED`, `ADMIN`, `CASHIER`); every
+      other authenticated role gets `FORBIDDEN_ROLE` (BR-ROLE-05). `x-br` lists the rules the operation enforces and
+      `x-error-codes` the §9 codes it may return.
+    - Check precedence: `UNAUTHENTICATED` → `FORBIDDEN_ROLE` (role) → `NOT_FOUND` (path id) → `VALIDATION_ERROR` (body
+      shape) → ownership (`NOT_ORDER_OWNER`, or `FORBIDDEN_ROLE` for another cashier's shift/order) → state/business codes.
+      A non-existent id referenced in the **body** (`table_id`, `item_id`, `category_id`) → `NOT_FOUND` (BR §9, US-23.8),
+      checked after body shape. Operations with several business codes state their full order in their description.
+
+    **GATE B decisions (approved by the owner on 2026-09-29; contract review P2-02 applied in P2-04)**
+    - D1: a CASHIER reading another cashier's existing shift, or another cashier's order that is not OPEN DINE_IN, gets
+      `FORBIDDEN_ROLE` (403); a non-existent id gets `NOT_FOUND`. The same applies to a CASHIER passing someone else's
+      `cashier_id` or `shift_id` to `/api/orders`, or `cashier_id` to `/api/shifts`.
+    - D2: text limits — Settings `business_name` 1–80, `receipt_footer` 0–200; user `name` 1–100; category `name` 1–50;
+      item `name` 1–80; cancel `reason` 3–200; order line `qty` 1–999 (recorded in BR §2 by the PA in v1.3).
+    - D3: `INTERNAL_ERROR` (500) "حدث خطأ غير متوقع، حاول مرة أخرى" (BR §9 v1.3); offline banner (UI only) "لا يوجد اتصال
+      بالإنترنت — لا يمكن تنفيذ العمليات حتى يعود الاتصال".
+    - D4: the fixed category icon set (BR-ITEM-07) is the 20 keys of `CategoryIcon`.
+    - D5: closing an already CLOSED shift → `NO_OPEN_SHIFT`; a receipt for a non-PAID order → `NOT_FOUND`.
+    - D6: every 429 (BR-AUTH-03 and the generic API throttles) uses `TOO_MANY_ATTEMPTS`.
+  x-business-rules-version: '1.3'
+servers:
+- url: https://api.cashier.hossam-ameen.online
+  description: Single environment (ADR-0004)
+security:
+- bearerAuth: []
+tags:
+- name: health
+- name: auth
+  description: Slice 1 — BR-AUTH-*
+- name: users
+  description: Slice 2 — BR-USR-*
+- name: cashiers
+  description: Slice 2 — cashier projection
+- name: settings
+  description: Slice 2 — BR-SET-*
+- name: catalog
+  description: Slice 3 — BR-ITEM-*
+- name: tables
+  description: Slice 4 — BR-TBL-*
+- name: shifts
+  description: Slices 5 and 8 — BR-SHIFT-*
+- name: orders
+  description: Slices 6 and 9 — BR-ORD-*
+- name: payments
+  description: Slice 7 — BR-PAY-*
+- name: dashboard
+  description: Slice 10
+paths:
+  /api/health:
+    get:
+      operationId: getHealth
+      tags:
+      - health
+      summary: Liveness check
+      description: |-
+        Returns healthy when the Django app runs (DRF_SKILL §23–27). Requires the health token, preferably in the `X-Health-Check-Token` header (the `password` query parameter is also accepted). Not a business endpoint.
+
+        BR: —.
+        Errors: `UNAUTHENTICATED`, `TOO_MANY_ATTEMPTS`.
+      x-roles:
+      - PUBLIC
+      x-br:
+      - —
+      x-error-codes:
+      - UNAUTHENTICATED
+      - TOO_MANY_ATTEMPTS
+      security: []
+      parameters:
+      - name: X-Health-Check-Token
+        in: header
+        required: false
+        schema:
+          type: string
+      - name: password
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '429':
+          $ref: '#/components/responses/Error429'
+  /api/auth/login:
+    post:
+      operationId: login
+      tags:
+      - auth
+      summary: Log in with username + password
+      description: |-
+        Authenticates by username (case-insensitive) and password (BR-AUTH-01; username only, OQ-4). On success returns an
+        access token (15 min) and the user, sets the httpOnly refresh cookie `pos_refresh` (host-only, `Path=/api/auth/`,
+        `SameSite=Strict`, `Max-Age` 7 days if `remember_me`, else a session cookie — OQ-6, ADR-0003/0011) and sets
+        `last_login_at`. The PWA routes by `user.role` (BR-AUTH-04).
+
+        Order of checks (OQ-30): (1) ≥ 5 failed attempts for this username+IP in the last 5 minutes → `TOO_MANY_ATTEMPTS`
+        even with a correct password (BR-AUTH-03); (2) unknown username or wrong password → `INVALID_CREDENTIALS`
+        with an identical body (BR-AUTH-01) and a failure is recorded; (3) correct password but DISABLED → `USER_DISABLED`
+        (BR-AUTH-02); (4) success clears the failure counter.
+
+        BR: BR-AUTH-01, BR-AUTH-02, BR-AUTH-03, BR-AUTH-04, OQ-4, OQ-6, OQ-30, AC-12, AC-13.
+        Errors: `INVALID_CREDENTIALS`, `USER_DISABLED`, `TOO_MANY_ATTEMPTS`, `VALIDATION_ERROR`.
+      x-roles:
+      - PUBLIC
+      x-br:
+      - BR-AUTH-01
+      - BR-AUTH-02
+      - BR-AUTH-03
+      - BR-AUTH-04
+      - OQ-4
+      - OQ-6
+      - OQ-30
+      - AC-12
+      - AC-13
+      x-error-codes:
+      - INVALID_CREDENTIALS
+      - USER_DISABLED
+      - TOO_MANY_ATTEMPTS
+      - VALIDATION_ERROR
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionEnvelope'
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: pos_refresh=…; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '422':
+          $ref: '#/components/responses/Error422'
+        '429':
+          $ref: '#/components/responses/Error429'
+  /api/auth/refresh:
+    post:
+      operationId: refreshSession
+      tags:
+      - auth
+      summary: Get a new access token from the refresh cookie
+      description: |-
+        Reads `pos_refresh`, rotates it (the old one is blacklisted) and returns a new access token plus the current user.
+        Requires `X-Requested-With: simple-pos` and an allowed `Origin` (CSRF guard, ADR-0003). A missing/invalid/expired/
+        revoked cookie, a DISABLED user, or a stale token version (password/role change, disable) → `UNAUTHENTICATED`
+        (BR-AUTH-02, OQ-31). No request body.
+
+        BR: BR-AUTH-02, OQ-6, OQ-31.
+        Errors: `UNAUTHENTICATED`, `TOO_MANY_ATTEMPTS`.
+      x-roles:
+      - PUBLIC
+      x-br:
+      - BR-AUTH-02
+      - OQ-6
+      - OQ-31
+      x-error-codes:
+      - UNAUTHENTICATED
+      - TOO_MANY_ATTEMPTS
+      security:
+      - refreshCookie: []
+      parameters:
+      - $ref: '#/components/parameters/XRequestedWith'
+      responses:
+        '200':
+          description: New access token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '429':
+          $ref: '#/components/responses/Error429'
+  /api/auth/logout:
+    post:
+      operationId: logout
+      tags:
+      - auth
+      summary: End this device's session
+      description: |-
+        Blacklists the refresh token from the cookie and clears the cookie. Always allowed, also with an OPEN shift, which stays
+        OPEN (OQ-29). Used after closing a shift (BR-SHIFT-09). Requires `X-Requested-With: simple-pos` (ADR-0003). Idempotent:
+        a missing or already-revoked cookie still returns 204.
+
+        BR: BR-SHIFT-09, OQ-29.
+        Errors: `UNAUTHENTICATED`, `TOO_MANY_ATTEMPTS`.
+      x-roles:
+      - PUBLIC
+      x-br:
+      - BR-SHIFT-09
+      - OQ-29
+      x-error-codes:
+      - UNAUTHENTICATED
+      - TOO_MANY_ATTEMPTS
+      security:
+      - refreshCookie: []
+      parameters:
+      - $ref: '#/components/parameters/XRequestedWith'
+      responses:
+        '204':
+          description: No content.
+        '401':
+          $ref: '#/components/responses/Error401'
+        '429':
+          $ref: '#/components/responses/Error429'
+  /api/auth/me:
+    get:
+      operationId: getMe
+      tags:
+      - auth
+      summary: Current user
+      description: |-
+        The authenticated user (profile page "الحساب", OQ-13; header name/role, US-27).
+
+        BR: BR-AUTH-04, OQ-13.
+        Errors: `UNAUTHENTICATED`.
+      x-roles:
+      - ANY_AUTHENTICATED
+      x-br:
+      - BR-AUTH-04
+      - OQ-13
+      x-error-codes:
+      - UNAUTHENTICATED
+      responses:
+        '200':
+          description: Current user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+  /api/users:
+    get:
+      operationId: listUsers
+      tags:
+      - users
+      summary: List users (screen 18)
+      description: |-
+        All users, newest first, with tab counts. `search` matches name or username (US-18.1). ADMIN only (BR-ROLE-01).
+
+        BR: BR-ROLE-01, BR-ROLE-05, AC-11.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-ROLE-05
+      - AC-11
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      parameters:
+      - name: role
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/Role'
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/UserStatus'
+      - $ref: '#/components/parameters/Search'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPageEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+    post:
+      operationId: createUser
+      tags:
+      - users
+      summary: Create a user (screen 19)
+      description: |-
+        Creates an ADMIN or CASHIER. Username is lower-cased then must match `[a-z0-9._]{3,32}` (else `VALIDATION_ERROR`) and be
+        unique case-insensitively (else `DUPLICATE_VALUE`). Password ≥ 8, stored as argon2id, never returned (BR-USR-01).
+
+        BR: BR-ROLE-01, BR-USR-01, BR §2 User.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `DUPLICATE_VALUE`, `VALIDATION_ERROR`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-USR-01
+      - BR §2 User
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - DUPLICATE_VALUE
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/users/{id}:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getUser
+      tags:
+      - users
+      summary: Get a user
+      description: |-
+        One user (screen 19 edit mode). ADMIN only.
+
+        BR: BR-ROLE-01.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      responses:
+        '200':
+          description: The user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+    patch:
+      operationId: updateUser
+      tags:
+      - users
+      summary: Update, disable, enable or change role of a user (screens 16–19)
+      description: |-
+        Partial update. There is no delete (BR-USR-02). Rules:
+        - empty/omitted `password` = unchanged; otherwise ≥ 8 (BR-USR-01); a change revokes the user's sessions (OQ-31);
+        - `status: DISABLED` for a user with an OPEN shift → `USER_HAS_OPEN_SHIFT` (BR-USR-03); a successful disable revokes all
+          their sessions immediately (BR-AUTH-02);
+        - changing `role` while the user has an OPEN shift → `USER_HAS_OPEN_SHIFT` (BR-USR-05);
+        - disabling or demoting the last ACTIVE ADMIN → `LAST_ADMIN` (BR-USR-04), including an admin acting on themselves
+          (OQ-37);
+        - username rules as in createUser (`DUPLICATE_VALUE`); the username is editable (OQ-31);
+        - a **role change also revokes** the user's sessions (security measure so a stale role never authorizes a call,
+          BR-ROLE-05; PA ruling, contract review #10), like disable and password change (ADR-0011).
+
+        BR: BR-ROLE-01, BR-ROLE-05, BR-USR-01, BR-USR-02, BR-USR-03, BR-USR-04, BR-USR-05, BR-AUTH-02, OQ-31, OQ-37, AC-11, AC-12.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `USER_HAS_OPEN_SHIFT`, `LAST_ADMIN`, `DUPLICATE_VALUE`, `VALIDATION_ERROR`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-ROLE-05
+      - BR-USR-01
+      - BR-USR-02
+      - BR-USR-03
+      - BR-USR-04
+      - BR-USR-05
+      - BR-AUTH-02
+      - OQ-31
+      - OQ-37
+      - AC-11
+      - AC-12
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - USER_HAS_OPEN_SHIFT
+      - LAST_ADMIN
+      - DUPLICATE_VALUE
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/cashiers:
+    get:
+      operationId: listCashiers
+      tags:
+      - cashiers
+      summary: Cashiers projection (screen 16)
+      description: |-
+        Users with role CASHIER plus their current OPEN shift (if any) and last login, with tab counts. Read-only projection of users + shifts (BR §2 User). Manage accounts via /api/users. ADMIN only.
+
+        BR: BR-ROLE-01, BR §2 User.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR §2 User
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/UserStatus'
+      - $ref: '#/components/parameters/Search'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of cashiers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashierPageEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+  /api/cashiers/{id}:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getCashier
+      tags:
+      - cashiers
+      summary: Cashier profile (screen 17)
+      description: |-
+        Profile, created_at (OQ-35) and the live totals of the current OPEN shift (BR-SHIFT-05). Shift history comes from `GET /api/shifts?cashier_id=…` (last 30 days by default in the UI, OQ-35). A non-CASHIER id → `NOT_FOUND`. ADMIN only.
+
+        BR: BR-ROLE-01, BR-SHIFT-05, OQ-35.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-SHIFT-05
+      - OQ-35
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      responses:
+        '200':
+          description: The cashier.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashierDetailEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /api/settings:
+    get:
+      operationId: getSettings
+      tags:
+      - settings
+      summary: Read Settings
+      description: |-
+        The Settings singleton (business_name, receipt_footer). Any authenticated user may read it because the receipt uses it (BR-SET-02, BR-PAY-07).
+
+        BR: BR-SET-01, BR-SET-02, BR-SET-03.
+        Errors: `UNAUTHENTICATED`.
+      x-roles:
+      - ANY_AUTHENTICATED
+      x-br:
+      - BR-SET-01
+      - BR-SET-02
+      - BR-SET-03
+      x-error-codes:
+      - UNAUTHENTICATED
+      responses:
+        '200':
+          description: Settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+    patch:
+      operationId: updateSettings
+      tags:
+      - settings
+      summary: Update Settings (الإعدادات)
+      description: |-
+        ADMIN only (BR-SET-02). business_name trimmed and non-empty (BR-SET-01); receipt_footer may be empty. There is no create/delete, no currency and no logo (BR-SET-03).
+
+        BR: BR-SET-01, BR-SET-02, BR-SET-03.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `VALIDATION_ERROR`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-SET-01
+      - BR-SET-02
+      - BR-SET-03
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsUpdate'
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/categories:
+    get:
+      operationId: listCategories
+      tags:
+      - catalog
+      summary: List categories (screen 08)
+      description: |-
+        All categories ordered by sort_order then name (BR-ITEM-06), with item counts. ADMIN only; cashiers use /api/catalog.
+
+        BR: BR-ROLE-01, BR-ITEM-06.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-ITEM-06
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/CatalogStatus'
+      responses:
+        '200':
+          description: Categories.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryListEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+    post:
+      operationId: createCategory
+      tags:
+      - catalog
+      summary: Create a category
+      description: |-
+        Name unique (`DUPLICATE_VALUE`); icon null or a key of the fixed set (BR-ITEM-07). ADMIN only.
+
+        BR: BR-ROLE-01, BR-ITEM-07, BR §2 Category.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `DUPLICATE_VALUE`, `VALIDATION_ERROR`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-ITEM-07
+      - BR §2 Category
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - DUPLICATE_VALUE
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryCreate'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/categories/{id}:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getCategory
+      tags:
+      - catalog
+      summary: Get a category
+      description: |-
+        ADMIN only.
+
+        BR: BR-ROLE-01.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      responses:
+        '200':
+          description: The category.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+    patch:
+      operationId: updateCategory
+      tags:
+      - catalog
+      summary: Update / enable / disable a category
+      description: |-
+        Disabling hides the category and all its items from ordering (BR-ITEM-05, BR-ITEM-01). ADMIN only.
+
+        BR: BR-ROLE-01, BR-ITEM-05, BR-ITEM-07, AC-10.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `DUPLICATE_VALUE`, `VALIDATION_ERROR`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-ITEM-05
+      - BR-ITEM-07
+      - AC-10
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - DUPLICATE_VALUE
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryUpdate'
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+    delete:
+      operationId: deleteCategory
+      tags:
+      - catalog
+      summary: Delete an empty category
+      description: |-
+        Only a category with zero items (any status) can be deleted; otherwise `CATEGORY_NOT_EMPTY` (BR-ITEM-05). ADMIN only.
+
+        BR: BR-ROLE-01, BR-ITEM-05, BR-GEN-04, AC-10.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `CATEGORY_NOT_EMPTY`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-ITEM-05
+      - BR-GEN-04
+      - AC-10
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - CATEGORY_NOT_EMPTY
+      responses:
+        '204':
+          description: No content.
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+  /api/items:
+    get:
+      operationId: listItems
+      tags:
+      - catalog
+      summary: List items (screen 09)
+      description: |-
+        Paginated, ordered by category sort_order, then item name. `search` matches the item name. ADMIN only.
+
+        BR: BR-ROLE-01.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      parameters:
+      - name: category_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/CatalogStatus'
+      - $ref: '#/components/parameters/Search'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of items.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemPageEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+    post:
+      operationId: createItem
+      tags:
+      - catalog
+      summary: Create an item (screen 10)
+      description: |-
+        price_minor > 0 (BR-ITEM-02); name unique within its category (`DUPLICATE_VALUE`); description ≤ 500. Unknown category_id → `NOT_FOUND` (BR §9, US-23.8). ADMIN only.
+
+        BR: BR-ROLE-01, BR-ITEM-02, BR §2 Item.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `DUPLICATE_VALUE`, `VALIDATION_ERROR`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-ITEM-02
+      - BR §2 Item
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - DUPLICATE_VALUE
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemCreate'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/items/{id}:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getItem
+      tags:
+      - catalog
+      summary: Get an item
+      description: |-
+        ADMIN only.
+
+        BR: BR-ROLE-01.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      responses:
+        '200':
+          description: The item.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+    patch:
+      operationId: updateItem
+      tags:
+      - catalog
+      summary: Update / enable / disable an item (screens 09, 10)
+      description: |-
+        Price or name changes never affect existing order lines (BR-ITEM-03). A DISABLED item cannot be added to orders (BR-ITEM-01). Unknown path id or body `category_id` → `NOT_FOUND` (BR §9, US-23.8). ADMIN only.
+
+        BR: BR-ROLE-01, BR-ITEM-01, BR-ITEM-02, BR-ITEM-03, AC-09, AC-10.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `DUPLICATE_VALUE`, `VALIDATION_ERROR`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-ITEM-01
+      - BR-ITEM-02
+      - BR-ITEM-03
+      - AC-09
+      - AC-10
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - DUPLICATE_VALUE
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemUpdate'
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+    delete:
+      operationId: deleteItem
+      tags:
+      - catalog
+      summary: Delete a never-used item
+      description: |-
+        An item referenced by any order line → `ITEM_IN_USE` (disable it instead); a never-used item is hard-deleted (BR-ITEM-04, BR-GEN-04). ADMIN only.
+
+        BR: BR-ROLE-01, BR-ITEM-04, BR-GEN-04, AC-10.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `ITEM_IN_USE`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-ITEM-04
+      - BR-GEN-04
+      - AC-10
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - ITEM_IN_USE
+      responses:
+        '204':
+          description: No content.
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+  /api/catalog:
+    get:
+      operationId: getCatalog
+      tags:
+      - catalog
+      summary: Orderable catalogue (screen 11)
+      description: |-
+        Only ACTIVE items in ACTIVE categories (BR-ITEM-01); categories by sort_order then name, items by name (BR-ITEM-06); each category carries its icon (BR-ITEM-07).
+
+        BR: BR-ITEM-01, BR-ITEM-06, BR-ITEM-07.
+        Errors: `UNAUTHENTICATED`.
+      x-roles:
+      - ADMIN
+      - CASHIER
+      x-br:
+      - BR-ITEM-01
+      - BR-ITEM-06
+      - BR-ITEM-07
+      x-error-codes:
+      - UNAUTHENTICATED
+      responses:
+        '200':
+          description: Catalogue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+  /api/tables:
+    get:
+      operationId: listTables
+      tags:
+      - tables
+      summary: Tables grid (screen 06)
+      description: |-
+        Ordered by number. `status` is derived: OCCUPIED iff an OPEN order references the table (BR-TBL-01); an occupied table
+        carries its order number, item count (Σ qty) and total after discount (BR-TBL-04, OQ-14). CASHIER: active tables only
+        (BR-TBL-06); ADMIN: all tables, `is_active` filter allowed (US-21.5). Counts respect the caller's visibility.
+
+        BR: BR-TBL-01, BR-TBL-04, BR-TBL-06, OQ-14, AC-06.
+        Errors: `UNAUTHENTICATED`.
+      x-roles:
+      - ADMIN
+      - CASHIER
+      x-br:
+      - BR-TBL-01
+      - BR-TBL-04
+      - BR-TBL-06
+      - OQ-14
+      - AC-06
+      x-error-codes:
+      - UNAUTHENTICATED
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/TableStatus'
+      - name: is_active
+        in: query
+        required: false
+        schema:
+          type: boolean
+        description: ADMIN only; ignored for CASHIER.
+      responses:
+        '200':
+          description: Tables.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableListEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+    post:
+      operationId: createTable
+      tags:
+      - tables
+      summary: Add a table (screen 06 admin dialog)
+      description: |-
+        Positive unique number (`DUPLICATE_VALUE`); created active by default (US-21.1, OQ-32). ADMIN only.
+
+        BR: BR-ROLE-01, BR-TBL-06, OQ-32.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `DUPLICATE_VALUE`, `VALIDATION_ERROR`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-TBL-06
+      - OQ-32
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - DUPLICATE_VALUE
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TableCreate'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/tables/{id}:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getTable
+      tags:
+      - tables
+      summary: Table details (screen 07)
+      description: |-
+        Same shape as a grid card. For the lines, call `GET /api/orders/{current_order.id}`. An inactive table is `NOT_FOUND` for a CASHIER (BR-TBL-06).
+
+        BR: BR-TBL-01, BR-TBL-04, BR-TBL-06.
+        Errors: `UNAUTHENTICATED`, `NOT_FOUND`.
+      x-roles:
+      - ADMIN
+      - CASHIER
+      x-br:
+      - BR-TBL-01
+      - BR-TBL-04
+      - BR-TBL-06
+      x-error-codes:
+      - UNAUTHENTICATED
+      - NOT_FOUND
+      responses:
+        '200':
+          description: The table.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
+    patch:
+      operationId: updateTable
+      tags:
+      - tables
+      summary: Renumber / activate / deactivate a table
+      description: |-
+        An OCCUPIED table cannot be deactivated or renumbered → `TABLE_OCCUPIED` (BR-TBL-06). Number unique (`DUPLICATE_VALUE`). No delete exists (OQ-32, BR-GEN-04). ADMIN only.
+
+        BR: BR-ROLE-01, BR-TBL-06, BR-GEN-04, OQ-32.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `TABLE_OCCUPIED`, `DUPLICATE_VALUE`, `VALIDATION_ERROR`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-ROLE-01
+      - BR-TBL-06
+      - BR-GEN-04
+      - OQ-32
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - TABLE_OCCUPIED
+      - DUPLICATE_VALUE
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TableUpdate'
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/shifts:
+    get:
+      operationId: listShifts
+      tags:
+      - shifts
+      summary: Shift history (screen 17, admin الورديات)
+      description: |-
+        Newest `opened_at` first. ADMIN: all shifts, optional `cashier_id` filter (US-29). CASHIER: only their own shifts
+        (BR-ROLE-04); a `cashier_id` other than the caller → `FORBIDDEN_ROLE`. CLOSED rows use the stored snapshot
+        (BR-SHIFT-08); OPEN rows use live totals (BR-SHIFT-05). `date_from`/`date_to` filter on `opened_at` (Cairo dates).
+
+        BR: BR-ROLE-01, BR-ROLE-04, BR-SHIFT-05, BR-SHIFT-08, OQ-12, OQ-35.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`.
+      x-roles:
+      - ADMIN
+      - CASHIER
+      x-br:
+      - BR-ROLE-01
+      - BR-ROLE-04
+      - BR-SHIFT-05
+      - BR-SHIFT-08
+      - OQ-12
+      - OQ-35
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      parameters:
+      - name: cashier_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/ShiftStatus'
+      - $ref: '#/components/parameters/DateFrom'
+      - $ref: '#/components/parameters/DateTo'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of shifts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShiftPageEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+    post:
+      operationId: openShift
+      tags:
+      - shifts
+      summary: Open my shift (screen 03)
+      description: |-
+        Opens a shift for the caller with `opening_balance_minor` ≥ 0; `opened_at` is server time and any client value is
+        ignored (BR-SHIFT-02). A second OPEN shift → `SHIFT_ALREADY_OPEN`, guaranteed by the partial unique index even under
+        concurrent requests (BR-SHIFT-01, AC-03, ADR-0006). ADMIN → `FORBIDDEN_ROLE` (BR-ROLE-02).
+
+        BR: BR-SHIFT-01, BR-SHIFT-02, BR-ROLE-02, BR-ROLE-03, AC-03, AC-11.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `SHIFT_ALREADY_OPEN`, `VALIDATION_ERROR`.
+      x-roles:
+      - CASHIER
+      x-br:
+      - BR-SHIFT-01
+      - BR-SHIFT-02
+      - BR-ROLE-02
+      - BR-ROLE-03
+      - AC-03
+      - AC-11
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - SHIFT_ALREADY_OPEN
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShiftOpen'
+      responses:
+        '201':
+          description: Opened.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShiftEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/shifts/current:
+    get:
+      operationId: getCurrentShift
+      tags:
+      - shifts
+      summary: My current OPEN shift (screens 02, 04, 05)
+      description: |-
+        The caller's OPEN shift with live totals, expected cash and open order numbers, or `data: null` when none (BR-SHIFT-03 routing to screen 03).
+
+        BR: BR-SHIFT-03, BR-SHIFT-05, BR-SHIFT-06, BR-SHIFT-04, BR-GEN-03, AC-06.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`.
+      x-roles:
+      - CASHIER
+      x-br:
+      - BR-SHIFT-03
+      - BR-SHIFT-05
+      - BR-SHIFT-06
+      - BR-SHIFT-04
+      - BR-GEN-03
+      - AC-06
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      responses:
+        '200':
+          description: The OPEN shift or null.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentShiftEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+  /api/shifts/{id}:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getShift
+      tags:
+      - shifts
+      summary: Shift detail / closed-shift summary (screen 05 read-only layout)
+      description: |-
+        OPEN: live totals. CLOSED: the immutable snapshot (BR-SHIFT-08). ADMIN: any shift. CASHIER: own shifts only; another
+        cashier's existing shift → `FORBIDDEN_ROLE` (US-04.6, BR-ROLE-04 — GATE B default), unknown id → `NOT_FOUND`.
+
+        BR: BR-ROLE-04, BR-SHIFT-05, BR-SHIFT-06, BR-SHIFT-07, BR-SHIFT-08, BR-GEN-03, OQ-12.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`.
+      x-roles:
+      - ADMIN
+      - CASHIER
+      x-br:
+      - BR-ROLE-04
+      - BR-SHIFT-05
+      - BR-SHIFT-06
+      - BR-SHIFT-07
+      - BR-SHIFT-08
+      - BR-GEN-03
+      - OQ-12
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      responses:
+        '200':
+          description: The shift.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShiftEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /api/shifts/{id}/close:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    post:
+      operationId: closeShift
+      tags:
+      - shifts
+      summary: Close my shift (screen 05)
+      description: |-
+        In one transaction with the shift row locked (ADR-0006): the shift must be the caller's own (another cashier's →
+        `FORBIDDEN_ROLE`) and OPEN (a CLOSED shift is terminal → `NO_OPEN_SHIFT`, GATE B default); any OPEN order → `SHIFT_HAS_OPEN_ORDERS` with `details.open_order_numbers` (BR-SHIFT-04). The server
+        recomputes sales/cash/card totals over PAID orders only (BR-SHIFT-05), expected cash = opening + cash (BR-SHIFT-06),
+        difference = counted − expected (BR-SHIFT-07), stores the snapshot and sets CLOSED forever (BR-SHIFT-08). The PWA then
+        shows the summary and logs out (BR-SHIFT-09). ADMIN → `FORBIDDEN_ROLE` (OQ-3).
+
+        BR: BR-SHIFT-04, BR-SHIFT-05, BR-SHIFT-06, BR-SHIFT-07, BR-SHIFT-08, BR-SHIFT-09, BR-ROLE-03, BR-GEN-03, OQ-3, AC-02, AC-03, AC-06.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `NO_OPEN_SHIFT`, `SHIFT_HAS_OPEN_ORDERS`, `VALIDATION_ERROR`.
+      x-roles:
+      - CASHIER
+      x-br:
+      - BR-SHIFT-04
+      - BR-SHIFT-05
+      - BR-SHIFT-06
+      - BR-SHIFT-07
+      - BR-SHIFT-08
+      - BR-SHIFT-09
+      - BR-ROLE-03
+      - BR-GEN-03
+      - OQ-3
+      - AC-02
+      - AC-03
+      - AC-06
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - NO_OPEN_SHIFT
+      - SHIFT_HAS_OPEN_ORDERS
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShiftClose'
+      responses:
+        '200':
+          description: Closed; the stored summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShiftEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/orders:
+    get:
+      operationId: listOrders
+      tags:
+      - orders
+      summary: Order history (screen 15) and shift order lists (screens 02, 04)
+      description: |-
+        Newest first. ADMIN: all orders; CASHIER: only orders they created, across all their shifts (BR-ROLE-04, OQ-11); a
+        CASHIER passing a `cashier_id` other than their own, or a `shift_id` of another cashier's shift → `FORBIDDEN_ROLE`. Filters: `date_from`/`date_to` on `created_at`
+        as Cairo dates (OQ-16; the PWA computes اليوم/أمس/هذا الأسبوع with the week starting Saturday), `cashier_id` (ADMIN),
+        `payment_method`, `status`, `shift_id`, `search` = order number with or without `#` (US-15.6). `today_counts` gives the
+        footer counts for today regardless of filters (OQ-15).
+
+        BR: BR-ROLE-01, BR-ROLE-04, BR-GEN-02, BR-ORD-10, OQ-11, OQ-15, OQ-16, AC-06.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`.
+      x-roles:
+      - ADMIN
+      - CASHIER
+      x-br:
+      - BR-ROLE-01
+      - BR-ROLE-04
+      - BR-GEN-02
+      - BR-ORD-10
+      - OQ-11
+      - OQ-15
+      - OQ-16
+      - AC-06
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      parameters:
+      - $ref: '#/components/parameters/DateFrom'
+      - $ref: '#/components/parameters/DateTo'
+      - name: cashier_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+      - name: payment_method
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/PaymentMethod'
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/OrderStatus'
+      - name: shift_id
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+      - $ref: '#/components/parameters/Search'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of orders.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPageEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+    post:
+      operationId: createOrder
+      tags:
+      - orders
+      summary: Confirm a new order — "تأكيد الطلب" (screen 11)
+      description: |-
+        Creates the order (status OPEN) from the client cart (BR-ORD-01) in one transaction (ADR-0006):
+        - caller must have an OPEN shift → else `NO_OPEN_SHIFT` (BR-SHIFT-03); the order belongs to the caller and that shift
+          (BR-ORD-03);
+        - `lines` empty → `ORDER_EMPTY` (BR-ORD-02); qty integer ≥ 1; note ≤ 140;
+        - every item must be ACTIVE in an ACTIVE category at confirm time → else `ITEM_INACTIVE` with `details.item_ids`, no
+          order created (BR-ITEM-01, OQ-22); snapshots of name and current price are stored (BR-ITEM-03);
+        - lines with the same item and equal note are merged (qty summed) (BR-ORD-05);
+        - DINE_IN requires `table_id` of an active table (`TABLE_INACTIVE`) with no OPEN order (`TABLE_OCCUPIED`, enforced by
+          the partial unique index under concurrency — BR-TBL-02/03, AC-04); TAKEAWAY must have no table (`VALIDATION_ERROR`)
+          (BR-ORD-04); unknown `table_id`/`item_id` → `NOT_FOUND` (BR §9, US-23.8);
+        - totals computed by the server (BR-ORD-06, BR-GEN-03); 0 ≤ discount ≤ subtotal else `DISCOUNT_INVALID` (BR-ORD-07);
+        - `number` from the global sequence starting at 1001 (BR-ORD-10).
+        ADMIN → `FORBIDDEN_ROLE` (BR-ROLE-02). No offline queueing (BR §0).
+
+        Check order (first failure wins): `UNAUTHENTICATED` → `FORBIDDEN_ROLE` → `VALIDATION_ERROR` (body shape, type/table
+        pairing) → `NO_OPEN_SHIFT` → `ORDER_EMPTY` → `NOT_FOUND` (table/item ids) → `ITEM_INACTIVE` → `TABLE_INACTIVE` →
+        `TABLE_OCCUPIED` → `DISCOUNT_INVALID`.
+
+        BR: BR-ORD-01, BR-ORD-02, BR-ORD-03, BR-ORD-04, BR-ORD-05, BR-ORD-06, BR-ORD-07, BR-ORD-10, BR-SHIFT-03, BR-TBL-02, BR-TBL-03, BR-ITEM-01, BR-ITEM-03, BR-ROLE-02, BR-GEN-03, OQ-22, AC-01, AC-03, AC-04, AC-09, AC-10, AC-11.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NO_OPEN_SHIFT`, `ORDER_EMPTY`, `NOT_FOUND`, `ITEM_INACTIVE`, `TABLE_INACTIVE`, `TABLE_OCCUPIED`, `DISCOUNT_INVALID`, `VALIDATION_ERROR`.
+      x-roles:
+      - CASHIER
+      x-br:
+      - BR-ORD-01
+      - BR-ORD-02
+      - BR-ORD-03
+      - BR-ORD-04
+      - BR-ORD-05
+      - BR-ORD-06
+      - BR-ORD-07
+      - BR-ORD-10
+      - BR-SHIFT-03
+      - BR-TBL-02
+      - BR-TBL-03
+      - BR-ITEM-01
+      - BR-ITEM-03
+      - BR-ROLE-02
+      - BR-GEN-03
+      - OQ-22
+      - AC-01
+      - AC-03
+      - AC-04
+      - AC-09
+      - AC-10
+      - AC-11
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NO_OPEN_SHIFT
+      - ORDER_EMPTY
+      - NOT_FOUND
+      - ITEM_INACTIVE
+      - TABLE_INACTIVE
+      - TABLE_OCCUPIED
+      - DISCOUNT_INVALID
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCreate'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/orders/{id}:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getOrder
+      tags:
+      - orders
+      summary: Order details (screens 07, 12, 14)
+      description: |-
+        Full order with lines (snapshots), totals, payment (if PAID) and cancel info (if CANCELLED). ADMIN: any order,
+        read-only. CASHIER: their own orders in any status; another cashier's order only while it is OPEN and DINE_IN (the
+        tables flow, read-only — BR-ROLE-06, US-12.9), otherwise `FORBIDDEN_ROLE` (BR-ROLE-04; same rule as another cashier's
+        shift, GATE B D1). Unknown id → `NOT_FOUND`.
+
+        BR: BR-ROLE-01, BR-ROLE-04, BR-ROLE-06, BR-ORD-06, BR-ITEM-03, AC-09.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`.
+      x-roles:
+      - ADMIN
+      - CASHIER
+      x-br:
+      - BR-ROLE-01
+      - BR-ROLE-04
+      - BR-ROLE-06
+      - BR-ORD-06
+      - BR-ITEM-03
+      - AC-09
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      responses:
+        '200':
+          description: The order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+    put:
+      operationId: updateOrder
+      tags:
+      - orders
+      summary: Edit an OPEN order (screen 11 edit mode)
+      description: |-
+        Replaces the line list and discount of an OPEN order owned by the caller, in one transaction with the order row locked.
+        Checks in order: ADMIN → `FORBIDDEN_ROLE` (BR-ROLE-02); not the owner → `NOT_ORDER_OWNER` (BR-ROLE-06); caller has
+        no OPEN shift → `NO_OPEN_SHIFT` (BR-SHIFT-03); not OPEN → `ORDER_NOT_EDITABLE` (BR-ORD-08, AC-05).
+        Line semantics: a line with `id` keeps its price/name snapshot and may change qty/note (BR-ITEM-03); lines without `id`
+        are new at the current price; a new line merges into an existing one only if item, note and unit price snapshot are
+        equal (BR-ORD-05, OQ-21); existing lines not listed are removed. A DISABLED item's existing line may be lowered or
+        removed but not raised or re-added → `ITEM_INACTIVE` (OQ-23); changing its note is allowed. Empty list → `ORDER_EMPTY`
+        (cancel is a separate operation). Discount rules as on create; never auto-clamped (OQ-20). Type and table cannot change
+        (OQ-18): a body containing `type` or `table_id` (or any other unknown field) → `VALIDATION_ERROR`. A line `id` that does
+        not belong to this order, or an existing line `id` sent with a different `item_id` → `VALIDATION_ERROR`. An unknown
+        `item_id` on a new line → `NOT_FOUND` (BR §9, US-23.8).
+
+        Check order: `UNAUTHENTICATED` → `FORBIDDEN_ROLE` → `NOT_FOUND` (path id) → `VALIDATION_ERROR` (body) →
+        `NOT_ORDER_OWNER` → `NO_OPEN_SHIFT` → `ORDER_NOT_EDITABLE` → `ORDER_EMPTY` → `NOT_FOUND` (item ids) → `ITEM_INACTIVE` →
+        `DISCOUNT_INVALID`.
+
+        BR: BR-ORD-02, BR-ORD-05, BR-ORD-06, BR-ORD-07, BR-ORD-08, BR-ITEM-01, BR-ITEM-03, BR-ROLE-02, BR-ROLE-06, BR-SHIFT-03, BR-GEN-03, OQ-18, OQ-20, OQ-21, OQ-23, AC-05, AC-09, AC-11.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `NOT_ORDER_OWNER`, `NO_OPEN_SHIFT`, `ORDER_NOT_EDITABLE`, `ORDER_EMPTY`, `ITEM_INACTIVE`, `DISCOUNT_INVALID`, `VALIDATION_ERROR`.
+      x-roles:
+      - CASHIER
+      x-br:
+      - BR-ORD-02
+      - BR-ORD-05
+      - BR-ORD-06
+      - BR-ORD-07
+      - BR-ORD-08
+      - BR-ITEM-01
+      - BR-ITEM-03
+      - BR-ROLE-02
+      - BR-ROLE-06
+      - BR-SHIFT-03
+      - BR-GEN-03
+      - OQ-18
+      - OQ-20
+      - OQ-21
+      - OQ-23
+      - AC-05
+      - AC-09
+      - AC-11
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - NOT_ORDER_OWNER
+      - NO_OPEN_SHIFT
+      - ORDER_NOT_EDITABLE
+      - ORDER_EMPTY
+      - ITEM_INACTIVE
+      - DISCOUNT_INVALID
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderUpdate'
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/orders/{id}/cancel:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    post:
+      operationId: cancelOrder
+      tags:
+      - orders
+      summary: Cancel an OPEN order (screen 12)
+      description: |-
+        Requires a reason with trimmed length ≥ 3 (else `VALIDATION_ERROR`, BR-ORD-09). Same ownership/shift/state checks as
+        updateOrder (row lock; BR-ROLE-06, BR-SHIFT-03, BR-ORD-08). Sets CANCELLED with `cancelled_at` and `cancel_reason`;
+        the table becomes AVAILABLE (BR-TBL-05); the order stays in history and is excluded from shift totals (BR-SHIFT-05,
+        AC-06). Racing a payment: exactly one wins, the other gets `ORDER_NOT_EDITABLE` (US-24.4).
+
+        Check order: `UNAUTHENTICATED` → `FORBIDDEN_ROLE` → `NOT_FOUND` → `VALIDATION_ERROR` (reason) → `NOT_ORDER_OWNER` →
+        `NO_OPEN_SHIFT` → `ORDER_NOT_EDITABLE`.
+
+        BR: BR-ORD-08, BR-ORD-09, BR-TBL-05, BR-SHIFT-03, BR-SHIFT-05, BR-ROLE-02, BR-ROLE-06, AC-05, AC-06, AC-11.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `NOT_ORDER_OWNER`, `NO_OPEN_SHIFT`, `ORDER_NOT_EDITABLE`, `VALIDATION_ERROR`.
+      x-roles:
+      - CASHIER
+      x-br:
+      - BR-ORD-08
+      - BR-ORD-09
+      - BR-TBL-05
+      - BR-SHIFT-03
+      - BR-SHIFT-05
+      - BR-ROLE-02
+      - BR-ROLE-06
+      - AC-05
+      - AC-06
+      - AC-11
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - NOT_ORDER_OWNER
+      - NO_OPEN_SHIFT
+      - ORDER_NOT_EDITABLE
+      - VALIDATION_ERROR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCancel'
+      responses:
+        '200':
+          description: Cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/orders/{id}/payment:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    post:
+      operationId: payOrder
+      tags:
+      - payments
+      summary: Pay an order — one payment, CASH or CARD (screen 13)
+      description: |-
+        One DB transaction (BR-PAY-04, ADR-0006/0007): lock the order row → idempotency lookup (replay or
+        `IDEMPOTENCY_CONFLICT`) → ownership (`NOT_ORDER_OWNER`, BR-ROLE-06) → caller has an OPEN shift and the order belongs to
+        it (`NO_OPEN_SHIFT`, BR-SHIFT-03) → order OPEN (`ORDER_NOT_EDITABLE`, BR-ORD-08) → method rules (`INSUFFICIENT_CASH`)
+        → insert the single Payment (unique per order, BR-PAY-01) → set PAID with `paid_at`. The table becomes AVAILABLE
+        (BR-PAY-05, BR-TBL-05). Before the lock: `UNAUTHENTICATED` → `FORBIDDEN_ROLE` → `NOT_FOUND` → `VALIDATION_ERROR`
+        (body shape, missing/malformed `Idempotency-Key`, negative amount).
+        - CASH: `amount_received_minor` required and ≥ total else `INSUFFICIENT_CASH`; change = received − total (BR-PAY-02).
+        - CARD: `amount_received_minor` must be absent/null (else `VALIDATION_ERROR`); received = total, change = 0 (BR-PAY-03).
+        Idempotency (`Idempotency-Key`, required, per user): same key + same order + same body → the original 201 response
+        replayed with header `Idempotent-Replayed: true` and no second payment; same key with a different body **or a different
+        order** → `IDEMPOTENCY_CONFLICT`; a different key on a PAID order → `ORDER_NOT_EDITABLE` (AC-07). Rejected attempts are not stored (ADR-0007). ADMIN → `FORBIDDEN_ROLE`.
+
+        BR: BR-PAY-01, BR-PAY-02, BR-PAY-03, BR-PAY-04, BR-PAY-05, BR-TBL-05, BR-ORD-08, BR-SHIFT-03, BR-ROLE-02, BR-ROLE-06, BR-GEN-03, AC-01, AC-07, AC-08, AC-11.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `NOT_ORDER_OWNER`, `NO_OPEN_SHIFT`, `ORDER_NOT_EDITABLE`, `INSUFFICIENT_CASH`, `IDEMPOTENCY_CONFLICT`, `VALIDATION_ERROR`.
+      x-roles:
+      - CASHIER
+      x-br:
+      - BR-PAY-01
+      - BR-PAY-02
+      - BR-PAY-03
+      - BR-PAY-04
+      - BR-PAY-05
+      - BR-TBL-05
+      - BR-ORD-08
+      - BR-SHIFT-03
+      - BR-ROLE-02
+      - BR-ROLE-06
+      - BR-GEN-03
+      - AC-01
+      - AC-07
+      - AC-08
+      - AC-11
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - NOT_ORDER_OWNER
+      - NO_OPEN_SHIFT
+      - ORDER_NOT_EDITABLE
+      - INSUFFICIENT_CASH
+      - IDEMPOTENCY_CONFLICT
+      - VALIDATION_ERROR
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCreate'
+      responses:
+        '201':
+          description: Paid (first time or replay).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResultEnvelope'
+          headers:
+            Idempotent-Replayed:
+              schema:
+                type: string
+                enum:
+                - 'true'
+              description: Present only when the stored response is replayed.
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '422':
+          $ref: '#/components/responses/Error422'
+  /api/orders/{id}/receipt:
+    parameters:
+    - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getOrderReceipt
+      tags:
+      - payments
+      summary: Receipt data for printing (screen 14)
+      description: |-
+        Receipt fields in BR-PAY-07 order, for the 80 mm browser print layout (BR-PAY-06). Only the owning CASHIER
+        (`NOT_ORDER_OWNER` otherwise); ADMIN → `FORBIDDEN_ROLE`; an order that is not PAID → `NOT_FOUND` (no receipt exists).
+        Ownership is checked before the PAID check.
+        Read-only, so refreshing screen 14 never re-submits payment (US-14.5). Printing is offered only on screen 14 (OQ-10).
+
+        BR: BR-PAY-06, BR-PAY-07, BR-SET-01, BR-ROLE-06, OQ-1, OQ-8, OQ-9, OQ-10.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`, `NOT_FOUND`, `NOT_ORDER_OWNER`.
+      x-roles:
+      - CASHIER
+      x-br:
+      - BR-PAY-06
+      - BR-PAY-07
+      - BR-SET-01
+      - BR-ROLE-06
+      - OQ-1
+      - OQ-8
+      - OQ-9
+      - OQ-10
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      - NOT_FOUND
+      - NOT_ORDER_OWNER
+      responses:
+        '200':
+          description: Receipt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiptEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /api/dashboard/cashier:
+    get:
+      operationId: getCashierDashboard
+      tags:
+      - dashboard
+      summary: Cashier dashboard (screen 02)
+      description: |-
+        The caller's OPEN shift with live KPIs (or null), table occupancy over all active tables, and the caller's OPEN orders (BR-SHIFT-05, BR-TBL-01, BR-TBL-04, OQ-15, G-41). ADMIN → `FORBIDDEN_ROLE` (routed to screen 20).
+
+        BR: BR-SHIFT-05, BR-TBL-01, BR-TBL-04, BR-AUTH-04, BR-GEN-03, OQ-15.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`.
+      x-roles:
+      - CASHIER
+      x-br:
+      - BR-SHIFT-05
+      - BR-TBL-01
+      - BR-TBL-04
+      - BR-AUTH-04
+      - BR-GEN-03
+      - OQ-15
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      responses:
+        '200':
+          description: Dashboard.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashierDashboardEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+  /api/dashboard/admin:
+    get:
+      operationId: getAdminDashboard
+      tags:
+      - dashboard
+      summary: Admin dashboard (screen 20)
+      description: |-
+        Today = Cairo calendar day (BR-GEN-02). Sales = Σ total of PAID orders with `paid_at` today, with their count; orders =
+        all orders created today with open/cancelled counts (OQ-15, G-16); open shifts with live sales; table occupancy;
+        cashier counts; latest 3 orders. No charts (BR §0). Also feeds the header's open-shifts badge. ADMIN only.
+
+        BR: BR-GEN-02, BR-GEN-03, BR-SHIFT-05, BR-TBL-01, BR-ROLE-01, BR-ROLE-05, OQ-15.
+        Errors: `UNAUTHENTICATED`, `FORBIDDEN_ROLE`.
+      x-roles:
+      - ADMIN
+      x-br:
+      - BR-GEN-02
+      - BR-GEN-03
+      - BR-SHIFT-05
+      - BR-TBL-01
+      - BR-ROLE-01
+      - BR-ROLE-05
+      - OQ-15
+      x-error-codes:
+      - UNAUTHENTICATED
+      - FORBIDDEN_ROLE
+      responses:
+        '200':
+          description: Dashboard.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDashboardEnvelope'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: pos_refresh
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Search:
+      name: search
+      in: query
+      required: false
+      schema:
+        type: string
+        maxLength: 100
+    DateFrom:
+      name: date_from
+      in: query
+      required: false
+      description: Inclusive Cairo calendar date (ADR-0013).
+      schema:
+        type: string
+        format: date
+    DateTo:
+      name: date_to
+      in: query
+      required: false
+      description: Inclusive Cairo calendar date (ADR-0013).
+      schema:
+        type: string
+        format: date
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: BR-PAY-04 / ADR-0007. 8–128 chars `[A-Za-z0-9_-]` (the PWA sends a UUID v4 per attempt); missing or malformed
+        → VALIDATION_ERROR. Scoped per user; the request hash covers the path order id and the body, so reusing a key on another
+        order or with another body → IDEMPOTENCY_CONFLICT.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: ^[A-Za-z0-9_-]{8,128}$
+    XRequestedWith:
+      name: X-Requested-With
+      in: header
+      required: true
+      description: CSRF guard for cookie-authenticated endpoints (ADR-0003). Missing/wrong → UNAUTHENTICATED.
+      schema:
+        type: string
+        enum:
+        - simple-pos
+  responses:
+    Error401:
+      description: INVALID_CREDENTIALS (login) or UNAUTHENTICATED (missing/invalid/expired/revoked session).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error403:
+      description: FORBIDDEN_ROLE, NOT_ORDER_OWNER, or USER_DISABLED (login).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error404:
+      description: NOT_FOUND.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error409:
+      description: State conflict — see the operation's x-error-codes.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error422:
+      description: VALIDATION_ERROR, ORDER_EMPTY, DISCOUNT_INVALID or INSUFFICIENT_CASH.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error429:
+      description: TOO_MANY_ATTEMPTS (BR-AUTH-03 on login; generic throttles elsewhere, ADR-0009).
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Role:
+      type: string
+      enum:
+      - ADMIN
+      - CASHIER
+      description: BR §2 User, BR §3.
+    UserStatus:
+      type: string
+      enum:
+      - ACTIVE
+      - DISABLED
+    CatalogStatus:
+      type: string
+      enum:
+      - ACTIVE
+      - DISABLED
+      description: Category/Item status.
+    CategoryIcon:
+      type: string
+      description: Fixed built-in icon set (BR-ITEM-07, OQ-33). Keys are rendered by the PWA; no uploads. The 20 keys were
+        approved by the owner at GATE B (D4).
+      enum:
+      - coffee
+      - tea
+      - juice
+      - soft_drink
+      - water
+      - breakfast
+      - sandwich
+      - burger
+      - pizza
+      - grill
+      - chicken
+      - pasta
+      - rice
+      - salad
+      - soup
+      - appetizer
+      - dessert
+      - cake
+      - ice_cream
+      - bakery
+    TableStatus:
+      type: string
+      enum:
+      - AVAILABLE
+      - OCCUPIED
+      description: Derived, never stored (BR-TBL-01).
+    ShiftStatus:
+      type: string
+      enum:
+      - OPEN
+      - CLOSED
+    OrderType:
+      type: string
+      enum:
+      - DINE_IN
+      - TAKEAWAY
+    OrderStatus:
+      type: string
+      enum:
+      - OPEN
+      - PAID
+      - CANCELLED
+    PaymentMethod:
+      type: string
+      enum:
+      - CASH
+      - CARD
+      description: BR-PAY-01.
+    ErrorCode:
+      type: string
+      description: BR §9 codes (BR-GEN-06). The HTTP status of each code is fixed by BR §9. `INTERNAL_ERROR` (500) is technical,
+        not a business rejection; approved by the owner at GATE B (D3) and added to BR §9 in BR v1.3 (ADR-0010).
+      enum:
+      - INVALID_CREDENTIALS
+      - USER_DISABLED
+      - TOO_MANY_ATTEMPTS
+      - FORBIDDEN_ROLE
+      - SHIFT_ALREADY_OPEN
+      - NO_OPEN_SHIFT
+      - SHIFT_HAS_OPEN_ORDERS
+      - TABLE_OCCUPIED
+      - TABLE_INACTIVE
+      - ITEM_INACTIVE
+      - ORDER_EMPTY
+      - ORDER_NOT_EDITABLE
+      - NOT_ORDER_OWNER
+      - DISCOUNT_INVALID
+      - INSUFFICIENT_CASH
+      - ITEM_IN_USE
+      - CATEGORY_NOT_EMPTY
+      - USER_HAS_OPEN_SHIFT
+      - LAST_ADMIN
+      - VALIDATION_ERROR
+      - UNAUTHENTICATED
+      - NOT_FOUND
+      - DUPLICATE_VALUE
+      - IDEMPOTENCY_CONFLICT
+      - INTERNAL_ERROR
+    Pagination:
+      type: object
+      required:
+      - page
+      - page_size
+      - total_items
+      - total_pages
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        page_size:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total_items:
+          type: integer
+          minimum: 0
+        total_pages:
+          type: integer
+          minimum: 1
+    ErrorDetails:
+      type: object
+      description: Always present, may be empty. Known keys per code (ADR-0010).
+      properties:
+        fields:
+          type: object
+          description: 'VALIDATION_ERROR: field path → machine hints (English, never shown).'
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        open_order_numbers:
+          type: array
+          items:
+            type: integer
+          description: SHIFT_HAS_OPEN_ORDERS (BR-SHIFT-04).
+        retry_after_seconds:
+          type: integer
+          nullable: true
+          description: TOO_MANY_ATTEMPTS.
+        item_ids:
+          type: array
+          items:
+            type: integer
+          description: ITEM_INACTIVE (BR-ITEM-01).
+        field:
+          type: string
+          description: 'DUPLICATE_VALUE: the unique field (BR §9).'
+      additionalProperties: true
+    Error:
+      type: object
+      required:
+      - success
+      - code
+      - message
+      - details
+      properties:
+        success:
+          type: boolean
+          enum:
+          - false
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          description: Arabic message from BR §9, verbatim.
+        details:
+          $ref: '#/components/schemas/ErrorDetails'
+    Health:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - healthy
+    CurrentUser:
+      type: object
+      description: The authenticated user (BR-AUTH-04 routing uses `role`).
+      required:
+      - id
+      - name
+      - username
+      - role
+      - status
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+        username:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+    LoginRequest:
+      type: object
+      required:
+      - username
+      - password
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Case-insensitive.
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+          format: password
+        remember_me:
+          type: boolean
+          default: false
+          description: 'OQ-6: true → 7-day persistent cookie; false → session cookie.'
+    AuthSession:
+      type: object
+      required:
+      - access_token
+      - token_type
+      - access_expires_in
+      - user
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          enum:
+          - Bearer
+        access_expires_in:
+          type: integer
+          description: Seconds (900, ADR-0011).
+        user:
+          $ref: '#/components/schemas/CurrentUser'
+    User:
+      type: object
+      required:
+      - id
+      - name
+      - username
+      - role
+      - status
+      - last_login_at
+      - created_at
+      - has_open_shift
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+        username:
+          type: string
+          description: Stored lower-case, `[a-z0-9._]{3,32}`.
+        role:
+          $ref: '#/components/schemas/Role'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        last_login_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+        has_open_shift:
+          type: boolean
+          description: Lets the UI explain BR-USR-03/05 before submitting.
+    UserCreate:
+      type: object
+      required:
+      - name
+      - username
+      - password
+      - role
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        username:
+          type: string
+          pattern: ^[A-Za-z0-9._]{3,32}$
+          description: Lower-cased by the server, then must match `[a-z0-9._]{3,32}` (BR §2 User).
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          format: password
+          description: BR-USR-01. Never returned by any endpoint.
+        role:
+          $ref: '#/components/schemas/Role'
+        status:
+          allOf:
+          - $ref: '#/components/schemas/UserStatus'
+          default: ACTIVE
+    UserUpdate:
+      type: object
+      description: Partial update; omitted fields are unchanged.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        username:
+          type: string
+          pattern: ^[A-Za-z0-9._]{3,32}$
+          description: Lower-cased by the server, then must match `[a-z0-9._]{3,32}` (BR §2 User).
+        password:
+          type: string
+          maxLength: 128
+          format: password
+          description: 'BR-USR-01: empty string or omitted = unchanged; otherwise ≥ 8 chars. A change revokes the user''s
+            sessions (OQ-31).'
+        role:
+          $ref: '#/components/schemas/Role'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+    UserCounts:
+      type: object
+      description: Tab counts on screen 18 (ignore filters).
+      required:
+      - all
+      - admin
+      - cashier
+      properties:
+        all:
+          type: integer
+        admin:
+          type: integer
+        cashier:
+          type: integer
+    UserPage:
+      type: object
+      required:
+      - items
+      - pagination
+      - counts
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        counts:
+          $ref: '#/components/schemas/UserCounts'
+    ShiftRef:
+      type: object
+      required:
+      - id
+      - code
+      - opened_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        code:
+          type: string
+          example: SH-0312
+        opened_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+    CashierListItem:
+      type: object
+      required:
+      - id
+      - name
+      - username
+      - status
+      - last_login_at
+      - current_shift
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+        username:
+          type: string
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        last_login_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+          nullable: true
+        current_shift:
+          allOf:
+          - $ref: '#/components/schemas/ShiftRef'
+          nullable: true
+    CashierCounts:
+      type: object
+      required:
+      - all
+      - active
+      - disabled
+      properties:
+        all:
+          type: integer
+        active:
+          type: integer
+        disabled:
+          type: integer
+    CashierPage:
+      type: object
+      required:
+      - items
+      - pagination
+      - counts
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CashierListItem'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        counts:
+          $ref: '#/components/schemas/CashierCounts'
+    ShiftLive:
+      type: object
+      required:
+      - id
+      - code
+      - opened_at
+      - orders_count
+      - sales_total_minor
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        code:
+          type: string
+        opened_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+        orders_count:
+          type: integer
+          description: PAID orders only (BR-SHIFT-05).
+        sales_total_minor:
+          type: integer
+          format: int64
+          description: Σ total of PAID orders (BR-SHIFT-05). Integer minor units (BR-GEN-01).
+    CashierDetail:
+      type: object
+      required:
+      - id
+      - name
+      - username
+      - role
+      - status
+      - created_at
+      - last_login_at
+      - current_shift
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+        username:
+          type: string
+        role:
+          type: string
+          enum:
+          - CASHIER
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+        last_login_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+          nullable: true
+        current_shift:
+          allOf:
+          - $ref: '#/components/schemas/ShiftLive'
+          nullable: true
+    Settings:
+      type: object
+      description: Singleton (BR-SET-01). Only these two fields exist (BR-SET-03, US-28.6).
+      required:
+      - business_name
+      - receipt_footer
+      properties:
+        business_name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        receipt_footer:
+          type: string
+          maxLength: 200
+    SettingsUpdate:
+      type: object
+      properties:
+        business_name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Trimmed; empty/whitespace → VALIDATION_ERROR (BR-SET-01). Max 80 = GATE B D2.
+        receipt_footer:
+          type: string
+          maxLength: 200
+          description: May be empty (BR-SET-01). Max 200 = GATE B D2.
+    Category:
+      type: object
+      required:
+      - id
+      - name
+      - sort_order
+      - status
+      - icon
+      - item_count
+      - created_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+        sort_order:
+          type: integer
+          minimum: 0
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+        icon:
+          allOf:
+          - $ref: '#/components/schemas/CategoryIcon'
+          nullable: true
+        item_count:
+          type: integer
+          description: All items in the category, any status (screen 08).
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+    CategoryCreate:
+      type: object
+      required:
+      - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+          description: Unique (DUPLICATE_VALUE).
+        sort_order:
+          type: integer
+          minimum: 0
+          default: 0
+        status:
+          allOf:
+          - $ref: '#/components/schemas/CatalogStatus'
+          default: ACTIVE
+        icon:
+          allOf:
+          - $ref: '#/components/schemas/CategoryIcon'
+          nullable: true
+          default: null
+    CategoryUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+          description: Unique (DUPLICATE_VALUE).
+        sort_order:
+          type: integer
+          minimum: 0
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+        icon:
+          allOf:
+          - $ref: '#/components/schemas/CategoryIcon'
+          nullable: true
+    Item:
+      type: object
+      required:
+      - id
+      - category_id
+      - category_name
+      - category_icon
+      - name
+      - price_minor
+      - description
+      - status
+      - in_use
+      - created_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        category_id:
+          type: integer
+          format: int64
+          minimum: 1
+        category_name:
+          type: string
+        category_icon:
+          allOf:
+          - $ref: '#/components/schemas/CategoryIcon'
+          nullable: true
+          description: BR-ITEM-07.
+        name:
+          type: string
+        price_minor:
+          type: integer
+          format: int64
+          description: Price (> 0, BR-ITEM-02). Integer minor units (BR-GEN-01).
+          minimum: 1
+        description:
+          type: string
+          maxLength: 500
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+        in_use:
+          type: boolean
+          description: Referenced by an order line → delete gives ITEM_IN_USE.
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+    ItemCreate:
+      type: object
+      required:
+      - category_id
+      - name
+      - price_minor
+      properties:
+        category_id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Unique within its category.
+        price_minor:
+          type: integer
+          format: int64
+          description: Price > 0 (BR-ITEM-02). The PWA converts "45.50" → 4550. Integer minor units (BR-GEN-01).
+          minimum: 1
+        description:
+          type: string
+          maxLength: 500
+          default: ''
+        status:
+          allOf:
+          - $ref: '#/components/schemas/CatalogStatus'
+          default: ACTIVE
+    ItemUpdate:
+      type: object
+      properties:
+        category_id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Unique within its category.
+        price_minor:
+          type: integer
+          format: int64
+          description: Price > 0 (BR-ITEM-02). Existing order lines keep their snapshot (BR-ITEM-03). Integer minor units
+            (BR-GEN-01).
+          minimum: 1
+        description:
+          type: string
+          maxLength: 500
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+    ItemPage:
+      type: object
+      required:
+      - items
+      - pagination
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Item'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    CatalogItem:
+      type: object
+      required:
+      - id
+      - name
+      - price_minor
+      - description
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+        price_minor:
+          type: integer
+          format: int64
+          description: Current price. Integer minor units (BR-GEN-01).
+          minimum: 1
+        description:
+          type: string
+    CatalogCategory:
+      type: object
+      required:
+      - id
+      - name
+      - sort_order
+      - icon
+      - items
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+        sort_order:
+          type: integer
+        icon:
+          allOf:
+          - $ref: '#/components/schemas/CategoryIcon'
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CatalogItem'
+    Catalog:
+      type: object
+      description: ACTIVE categories (sort_order, then name — BR-ITEM-06) with their ACTIVE items (BR-ITEM-01).
+      required:
+      - categories
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/CatalogCategory'
+    TableCurrentOrder:
+      type: object
+      required:
+      - id
+      - number
+      - item_count
+      - total_minor
+      - cashier_id
+      - cashier_name
+      - created_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        number:
+          type: integer
+          description: Order number, e.g. 1048 (BR-ORD-10).
+        item_count:
+          type: integer
+          description: Σ qty (BR-TBL-04).
+        total_minor:
+          type: integer
+          format: int64
+          description: Order total after discount (BR-TBL-04, OQ-14). Integer minor units (BR-GEN-01).
+        cashier_id:
+          type: integer
+          format: int64
+          minimum: 1
+        cashier_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+    Table:
+      type: object
+      required:
+      - id
+      - number
+      - is_active
+      - status
+      - current_order
+      - created_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        number:
+          type: integer
+          minimum: 1
+        is_active:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/TableStatus'
+        current_order:
+          allOf:
+          - $ref: '#/components/schemas/TableCurrentOrder'
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+    TableCounts:
+      type: object
+      required:
+      - all
+      - available
+      - occupied
+      properties:
+        all:
+          type: integer
+        available:
+          type: integer
+        occupied:
+          type: integer
+    TableList:
+      type: object
+      description: Not paginated (a floor has few tables). Ordered by number ascending.
+      required:
+      - items
+      - counts
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Table'
+        counts:
+          $ref: '#/components/schemas/TableCounts'
+    TableCreate:
+      type: object
+      required:
+      - number
+      properties:
+        number:
+          type: integer
+          minimum: 1
+        is_active:
+          type: boolean
+          default: true
+    TableUpdate:
+      type: object
+      properties:
+        number:
+          type: integer
+          minimum: 1
+        is_active:
+          type: boolean
+    Shift:
+      type: object
+      required:
+      - id
+      - code
+      - cashier_id
+      - cashier_name
+      - status
+      - opened_at
+      - closed_at
+      - opening_balance_minor
+      - sales_total_minor
+      - cash_total_minor
+      - card_total_minor
+      - orders_count
+      - open_orders_count
+      - open_order_numbers
+      - expected_cash_minor
+      - counted_cash_minor
+      - difference_minor
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        code:
+          type: string
+          description: '"SH-" + id zero-padded to 4 (OQ-35).'
+        cashier_id:
+          type: integer
+          format: int64
+          minimum: 1
+        cashier_name:
+          type: string
+        status:
+          $ref: '#/components/schemas/ShiftStatus'
+        opened_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+        closed_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+          nullable: true
+        opening_balance_minor:
+          type: integer
+          format: int64
+          description: BR-SHIFT-02. Integer minor units (BR-GEN-01).
+          minimum: 0
+        sales_total_minor:
+          type: integer
+          format: int64
+          description: Σ total of PAID orders (BR-SHIFT-05). Live if OPEN, snapshot if CLOSED. Integer minor units (BR-GEN-01).
+        cash_total_minor:
+          type: integer
+          format: int64
+          description: Σ total of PAID CASH orders (BR-SHIFT-05). Integer minor units (BR-GEN-01).
+        card_total_minor:
+          type: integer
+          format: int64
+          description: Σ total of PAID CARD orders (BR-SHIFT-05). Integer minor units (BR-GEN-01).
+        orders_count:
+          type: integer
+          description: Count of PAID orders (BR-SHIFT-05).
+        open_orders_count:
+          type: integer
+          description: OPEN orders in this shift (OQ-15).
+        open_order_numbers:
+          type: array
+          items:
+            type: integer
+          description: OPEN order numbers (BR-SHIFT-04; screen 05 disables close).
+        expected_cash_minor:
+          type: integer
+          format: int64
+          description: opening_balance + cash_total (BR-SHIFT-06). Integer minor units (BR-GEN-01).
+        counted_cash_minor:
+          type: integer
+          format: int64
+          description: Entered on close (BR-SHIFT-07); null while OPEN. Integer minor units (BR-GEN-01).
+          nullable: true
+        difference_minor:
+          type: integer
+          format: int64
+          description: counted − expected (BR-SHIFT-07); < 0 عجز, > 0 زيادة, 0 مطابق (OQ-36); null while OPEN. Integer minor
+            units (BR-GEN-01).
+          nullable: true
+    ShiftSummary:
+      type: object
+      description: Row of the shift history table (screen 17, admin الورديات — OQ-12 (a)).
+      required:
+      - id
+      - code
+      - cashier_id
+      - cashier_name
+      - status
+      - opened_at
+      - closed_at
+      - orders_count
+      - sales_total_minor
+      - difference_minor
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        code:
+          type: string
+        cashier_id:
+          type: integer
+          format: int64
+          minimum: 1
+        cashier_name:
+          type: string
+        status:
+          $ref: '#/components/schemas/ShiftStatus'
+        opened_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+        closed_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+          nullable: true
+        orders_count:
+          type: integer
+        sales_total_minor:
+          type: integer
+          format: int64
+          description: BR-SHIFT-05. Integer minor units (BR-GEN-01).
+        difference_minor:
+          type: integer
+          format: int64
+          description: Snapshot; null while OPEN. Integer minor units (BR-GEN-01).
+          nullable: true
+    ShiftPage:
+      type: object
+      required:
+      - items
+      - pagination
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShiftSummary'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    ShiftOpen:
+      type: object
+      required:
+      - opening_balance_minor
+      properties:
+        opening_balance_minor:
+          type: integer
+          format: int64
+          description: ≥ 0 (BR-SHIFT-02). `opened_at` is always server time. Integer minor units (BR-GEN-01).
+          minimum: 0
+    ShiftClose:
+      type: object
+      required:
+      - counted_cash_minor
+      properties:
+        counted_cash_minor:
+          type: integer
+          format: int64
+          description: ≥ 0 (BR-SHIFT-07). The server recomputes every total (BR-GEN-03). Integer minor units (BR-GEN-01).
+          minimum: 0
+    OrderLine:
+      type: object
+      required:
+      - id
+      - item_id
+      - item_name_snapshot
+      - unit_price_snapshot_minor
+      - qty
+      - note
+      - line_total_minor
+      - category_icon
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        item_id:
+          type: integer
+          format: int64
+          minimum: 1
+        item_name_snapshot:
+          type: string
+          description: BR-ITEM-03.
+        unit_price_snapshot_minor:
+          type: integer
+          format: int64
+          description: Price at the time the line was added (BR-ITEM-03). Integer minor units (BR-GEN-01).
+        qty:
+          type: integer
+          minimum: 1
+        note:
+          type: string
+          maxLength: 140
+        line_total_minor:
+          type: integer
+          format: int64
+          description: unit_price_snapshot × qty (BR-ORD-06). Integer minor units (BR-GEN-01).
+        category_icon:
+          allOf:
+          - $ref: '#/components/schemas/CategoryIcon'
+          nullable: true
+          description: BR-ITEM-07.
+    Payment:
+      type: object
+      required:
+      - id
+      - order_id
+      - method
+      - amount_due_minor
+      - amount_received_minor
+      - change_minor
+      - paid_at
+      - cashier_id
+      - shift_id
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        order_id:
+          type: integer
+          format: int64
+          minimum: 1
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        amount_due_minor:
+          type: integer
+          format: int64
+          description: = order total. Integer minor units (BR-GEN-01).
+        amount_received_minor:
+          type: integer
+          format: int64
+          description: 'CASH: entered (≥ due); CARD: = due (BR-PAY-02/03). Integer minor units (BR-GEN-01).'
+        change_minor:
+          type: integer
+          format: int64
+          description: received − due; 0 for CARD (BR-PAY-02/03). Integer minor units (BR-GEN-01).
+        paid_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+        cashier_id:
+          type: integer
+          format: int64
+          minimum: 1
+        shift_id:
+          type: integer
+          format: int64
+          minimum: 1
+    Order:
+      type: object
+      required:
+      - id
+      - number
+      - type
+      - status
+      - table_id
+      - table_number
+      - cashier_id
+      - cashier_name
+      - shift_id
+      - lines
+      - item_count
+      - subtotal_minor
+      - discount_minor
+      - total_minor
+      - created_at
+      - paid_at
+      - cancelled_at
+      - cancel_reason
+      - payment
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        number:
+          type: integer
+          minimum: 1001
+          description: 'Global sequence, shown as #1048 (BR-ORD-10).'
+        type:
+          $ref: '#/components/schemas/OrderType'
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        table_id:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+        table_number:
+          type: integer
+          nullable: true
+          description: null for TAKEAWAY (سفري).
+        cashier_id:
+          type: integer
+          format: int64
+          minimum: 1
+        cashier_name:
+          type: string
+        shift_id:
+          type: integer
+          format: int64
+          minimum: 1
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderLine'
+        item_count:
+          type: integer
+          description: Σ qty.
+        subtotal_minor:
+          type: integer
+          format: int64
+          description: Σ line_total (BR-ORD-06). Integer minor units (BR-GEN-01).
+        discount_minor:
+          type: integer
+          format: int64
+          description: Fixed amount, 0 ≤ discount ≤ subtotal (BR-ORD-07). Integer minor units (BR-GEN-01).
+        total_minor:
+          type: integer
+          format: int64
+          description: subtotal − discount (BR-ORD-06). Integer minor units (BR-GEN-01).
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+        paid_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+          nullable: true
+        cancelled_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+          nullable: true
+        cancel_reason:
+          type: string
+          nullable: true
+        payment:
+          allOf:
+          - $ref: '#/components/schemas/Payment'
+          nullable: true
+    OrderListItem:
+      type: object
+      required:
+      - id
+      - number
+      - type
+      - status
+      - table_number
+      - cashier_id
+      - cashier_name
+      - item_count
+      - total_minor
+      - payment_method
+      - created_at
+      - paid_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        number:
+          type: integer
+        type:
+          $ref: '#/components/schemas/OrderType'
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        table_number:
+          type: integer
+          nullable: true
+        cashier_id:
+          type: integer
+          format: int64
+          minimum: 1
+        cashier_name:
+          type: string
+        item_count:
+          type: integer
+        total_minor:
+          type: integer
+          format: int64
+          description: BR-ORD-06. Integer minor units (BR-GEN-01).
+        payment_method:
+          allOf:
+          - $ref: '#/components/schemas/PaymentMethod'
+          nullable: true
+          description: null unless PAID.
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+        paid_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+          nullable: true
+    OrderDayCounts:
+      type: object
+      description: Orders created today (Cairo) visible to the caller, by status (screen 15 footer, OQ-15).
+      required:
+      - total
+      - paid
+      - open
+      - cancelled
+      properties:
+        total:
+          type: integer
+        paid:
+          type: integer
+        open:
+          type: integer
+        cancelled:
+          type: integer
+    OrderPage:
+      type: object
+      required:
+      - items
+      - pagination
+      - today_counts
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderListItem'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        today_counts:
+          $ref: '#/components/schemas/OrderDayCounts'
+    OrderLineInput:
+      type: object
+      required:
+      - item_id
+      - qty
+      properties:
+        item_id:
+          type: integer
+          format: int64
+          minimum: 1
+        qty:
+          type: integer
+          minimum: 1
+          maximum: 999
+          description: Integer 1–999 (BR-ORD-02; max 999 = GATE B D2).
+        note:
+          type: string
+          maxLength: 140
+          default: ''
+          description: BR §2 OrderLine (≤ 140).
+    OrderCreate:
+      type: object
+      required:
+      - type
+      - lines
+      properties:
+        type:
+          $ref: '#/components/schemas/OrderType'
+        table_id:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+          description: Required iff DINE_IN; must be null/absent for TAKEAWAY.
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderLineInput'
+          description: Empty → ORDER_EMPTY (not VALIDATION_ERROR). Equal item+note lines are merged (BR-ORD-05).
+        discount_minor:
+          type: integer
+          format: int64
+          default: 0
+          description: Fixed amount; < 0 or > subtotal → DISCOUNT_INVALID (BR-ORD-07). Integer minor units.
+    OrderLineUpdateInput:
+      type: object
+      required:
+      - item_id
+      - qty
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+          description: Existing line id to keep its snapshot; null/absent = new line.
+        item_id:
+          type: integer
+          format: int64
+          minimum: 1
+        qty:
+          type: integer
+          minimum: 1
+          maximum: 999
+          description: Integer 1–999 (BR-ORD-02; max 999 = GATE B D2).
+        note:
+          type: string
+          maxLength: 140
+          default: ''
+          description: BR §2 OrderLine (≤ 140).
+    OrderUpdate:
+      type: object
+      required:
+      - lines
+      - discount_minor
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderLineUpdateInput'
+          description: The complete desired line list. Existing lines not listed are removed.
+        discount_minor:
+          type: integer
+          format: int64
+          description: Fixed amount (BR-ORD-07). Never auto-clamped (OQ-20). Integer minor units.
+      additionalProperties: false
+    OrderCancel:
+      type: object
+      required:
+      - reason
+      properties:
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 200
+          description: Trimmed length 3–200, else VALIDATION_ERROR (BR-ORD-09; max 200 = GATE B D2).
+    PaymentCreate:
+      type: object
+      required:
+      - method
+      properties:
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        amount_received_minor:
+          type: integer
+          format: int64
+          nullable: true
+          minimum: 0
+          description: 'CASH: required, ≥ 0 (negative → VALIDATION_ERROR, OQ-27), ≥ total else INSUFFICIENT_CASH (BR-PAY-02).
+            CARD: must be null/absent, else VALIDATION_ERROR (BR-PAY-03). Integer minor units.'
+    PaymentResult:
+      type: object
+      required:
+      - payment
+      - order
+      properties:
+        payment:
+          $ref: '#/components/schemas/Payment'
+        order:
+          $ref: '#/components/schemas/Order'
+    ReceiptLine:
+      type: object
+      required:
+      - name
+      - qty
+      - line_total_minor
+      properties:
+        name:
+          type: string
+        qty:
+          type: integer
+        line_total_minor:
+          type: integer
+          format: int64
+          description: BR-ORD-06. Integer minor units (BR-GEN-01).
+    Receipt:
+      type: object
+      description: Receipt data in BR-PAY-07 order. The PWA prints the title "إيصال"; no tax wording or lines (OQ-1, OQ-8),
+        no logo.
+      required:
+      - business_name
+      - order_number
+      - order_type
+      - table_number
+      - paid_at
+      - cashier_name
+      - lines
+      - subtotal_minor
+      - discount_minor
+      - total_minor
+      - payment_method
+      - amount_received_minor
+      - change_minor
+      - receipt_footer
+      properties:
+        business_name:
+          type: string
+        order_number:
+          type: integer
+        order_type:
+          $ref: '#/components/schemas/OrderType'
+        table_number:
+          type: integer
+          nullable: true
+          description: null → print "سفري".
+        paid_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+        cashier_name:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReceiptLine'
+        subtotal_minor:
+          type: integer
+          format: int64
+          description: BR-ORD-06. Integer minor units (BR-GEN-01).
+        discount_minor:
+          type: integer
+          format: int64
+          description: BR-ORD-07. Integer minor units (BR-GEN-01).
+        total_minor:
+          type: integer
+          format: int64
+          description: BR-ORD-06. Integer minor units (BR-GEN-01).
+        payment_method:
+          $ref: '#/components/schemas/PaymentMethod'
+        amount_received_minor:
+          type: integer
+          format: int64
+          description: CASH only; null for CARD. Integer minor units (BR-GEN-01).
+          nullable: true
+        change_minor:
+          type: integer
+          format: int64
+          description: CASH only; null for CARD. Integer minor units (BR-GEN-01).
+          nullable: true
+        receipt_footer:
+          type: string
+    TableOccupancy:
+      type: object
+      description: Over active tables, all cashiers (BR-TBL-01, G-41).
+      required:
+      - total_active
+      - available
+      - occupied
+      - occupied_total_minor
+      properties:
+        total_active:
+          type: integer
+        available:
+          type: integer
+        occupied:
+          type: integer
+        occupied_total_minor:
+          type: integer
+          format: int64
+          description: Σ total of the OPEN orders on occupied tables (screen 02). Integer minor units (BR-GEN-01).
+    CashierDashboard:
+      type: object
+      required:
+      - shift
+      - tables
+      - running_orders
+      properties:
+        shift:
+          allOf:
+          - $ref: '#/components/schemas/Shift'
+          nullable: true
+        tables:
+          $ref: '#/components/schemas/TableOccupancy'
+        running_orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderListItem'
+          description: The caller's OPEN orders, newest first (screen 02 الطلبات الجارية).
+    OpenShiftRow:
+      type: object
+      required:
+      - shift_id
+      - code
+      - cashier_id
+      - cashier_name
+      - opened_at
+      - sales_total_minor
+      properties:
+        shift_id:
+          type: integer
+          format: int64
+          minimum: 1
+        code:
+          type: string
+        cashier_id:
+          type: integer
+          format: int64
+          minimum: 1
+        cashier_name:
+          type: string
+        opened_at:
+          type: string
+          format: date-time
+          description: RFC 3339 UTC (BR-GEN-02).
+        sales_total_minor:
+          type: integer
+          format: int64
+          description: Live (BR-SHIFT-05). Integer minor units (BR-GEN-01).
+    AdminDashboard:
+      type: object
+      required:
+      - business_date
+      - sales_today_minor
+      - paid_orders_today
+      - orders_today
+      - open_shifts
+      - tables
+      - cashiers
+      - recent_orders
+      properties:
+        business_date:
+          type: string
+          format: date
+          description: Today in Africa/Cairo (BR-GEN-02).
+        sales_today_minor:
+          type: integer
+          format: int64
+          description: Σ total of PAID orders with paid_at today (OQ-15). Integer minor units (BR-GEN-01).
+        paid_orders_today:
+          type: integer
+          description: Count of those PAID orders (OQ-15, G-16).
+        orders_today:
+          $ref: '#/components/schemas/OrderDayCounts'
+        open_shifts:
+          type: object
+          required:
+          - count
+          - items
+          properties:
+            count:
+              type: integer
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/OpenShiftRow'
+        tables:
+          $ref: '#/components/schemas/TableOccupancy'
+        cashiers:
+          $ref: '#/components/schemas/CashierCounts'
+        recent_orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderListItem'
+          description: Latest 3 orders by created_at (screen 20).
+    HealthEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/Health'
+    AuthSessionEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/AuthSession'
+    CurrentUserEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/CurrentUser'
+    UserPageEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/UserPage'
+    UserEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/User'
+    CashierPageEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/CashierPage'
+    CashierDetailEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/CashierDetail'
+    SettingsEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/Settings'
+    CategoryListEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+    CategoryEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/Category'
+    ItemPageEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/ItemPage'
+    ItemEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/Item'
+    CatalogEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/Catalog'
+    TableListEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/TableList'
+    TableEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/Table'
+    ShiftPageEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/ShiftPage'
+    ShiftEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/Shift'
+    CurrentShiftEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          allOf:
+          - $ref: '#/components/schemas/Shift'
+          nullable: true
+    OrderPageEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/OrderPage'
+    OrderEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/Order'
+    PaymentResultEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/PaymentResult'
+    ReceiptEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/Receipt'
+    CashierDashboardEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/CashierDashboard'
+    AdminDashboardEnvelope:
+      type: object
+      required:
+      - success
+      - message
+      - data
+      properties:
+        success:
+          type: boolean
+          enum:
+          - true
+        message:
+          type: string
+          description: Informational, never shown to users (ADR-0010).
+        data:
+          $ref: '#/components/schemas/AdminDashboard'

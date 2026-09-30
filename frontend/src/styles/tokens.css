@@ -1,0 +1,15 @@
+/* Design tokens from the UI/UX PDF §4 (p.6). Mirrors tailwind.config.ts for non-Tailwind consumers (print CSS). */
+:root {
+  --color-primary: #0d7a6b;
+  --color-accent: #14b8a6;
+  --color-sidebar: #0f2724;
+  --color-success: #15803d;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+  --color-info: #2563eb;
+  --color-background: #f4f6f9;
+  --touch-min: 44px;
+  --touch-primary: 58px;
+  --font-sans: 'IBM Plex Sans Arabic', system-ui, sans-serif;
+  --receipt-width: 80mm; /* BR-PAY-06 */
+}

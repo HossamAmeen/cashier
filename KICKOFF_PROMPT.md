@@ -20,9 +20,9 @@ Delegate work to them with the Task tool. Do not do their work yourself. Give ea
 
 Execute the workflow in `CLAUDE.md §5` in order.
 
-**Phase 0 — devops-engineer.** Verify that `infra/deploy.env` exists and is complete, that SSH to the server works, and that DNS for `$DOMAIN` and `staging.$DOMAIN` points to `$SERVER_IP`.
-- If anything is missing, stop and tell me exactly what to provide or which DNS records to add.
-- Then bootstrap the server with `infra/scripts/bootstrap.sh`.
+**Phase 0 — devops-engineer.** Verify that `infra/deploy.env` exists and is complete, that SSH to the server works, and that DNS for `$FRONT_DOMAIN` (cashier.hossam-ameen.online) and `$BACKEND_DOMAIN` (api.cashier.hossam-ameen.online) points to `$SERVER_IP` (34.123.215.195). Ignore `$DOMAIN`; there is no staging host.
+- If anything is missing, stop and tell me exactly what to provide or which DNS records to add in Namecheap.
+- The server is shared with the live delivery app. Then bootstrap it with `infra/scripts/bootstrap.sh`, which must be additive only: keep the existing nginx on 80/443, add server blocks and certbot certificates for the two cashier hosts, and never reset ufw, sshd, or anything belonging to the delivery app.
 
 **Phase 1 — product-analyst.** Read the PDF and BUSINESS_RULES.md. Produce:
 - `docs/product/user-stories.md`
@@ -32,24 +32,24 @@ List any gaps or contradictions you found.
 ⛔ **GATE A:** summarize the rules and open questions for me and wait for "approved".
 
 **Phase 2 — team-lead.**
-- Write ADRs.
-- Scaffold the pnpm monorepo and CI.
+- Write ADRs, including: Django/DRF backend per `DRF_SKILL.md` (replaces NestJS/Prisma), shared server behind the existing nginx + certbot (no Caddy), separate front/API origins with CORS limited to `FRONT_DOMAIN`, and a single environment with no staging.
+- Scaffold `backend/` (Django/DRF per `DRF_SKILL.md`), `frontend/` (React PWA), `e2e/`, and CI.
 - Write `docs/api/openapi.yaml` (contract-first, reviewed by product-analyst).
 - Create `docs/tasks.md` and `docs/traceability.md`.
 
 ⛔ **GATE B:** show me the endpoint list and task plan and wait for "approved".
 
 **Phase 3 — backend-dev ∥ frontend-dev.** Build vertical slices in the order given in CLAUDE.md §5. The team-lead reviews each task against the Definition of Done before it is marked done.
-- After each slice, the devops-engineer deploys to **staging**.
+- After each slice, the devops-engineer deploys to the server (the single pre-launch environment).
 - The qa-engineer adds and runs that slice's tests **on the server** via `infra/scripts/qa-remote.sh`.
 
-**Phase 4–6 — full QA on the server.** Run the complete suite (all AC-01…AC-15, every BR) on staging via `infra/scripts/qa-remote.sh`.
+**Phase 4–6 — full QA on the server.** Run the complete suite (all AC-01…AC-15, every BR) on the server via `infra/scripts/qa-remote.sh`, before go-live, using test data only.
 - Failures become bugs in `docs/qa/bugs.md`.
-- Loop fix → redeploy staging → re-run QA on the server until the verdict is **GO**.
+- Loop fix → redeploy → re-run QA on the server until the verdict is **GO**.
 - Never accept test results produced on localhost.
 
-**Phase 7 — production.**
-⛔ **GATE C:** show me the GO report and the changelog, and wait for "approved". Then the devops-engineer runs `infra/scripts/deploy.sh production`, verifies `https://$DOMAIN/api/health`, and confirms backups are scheduled.
+**Phase 7 — go-live.**
+⛔ **GATE C:** show me the GO report and the changelog, and wait for "approved". Then the devops-engineer takes a backup, clears the QA test data, seeds the real starting data, verifies `https://$FRONT_DOMAIN` and `https://$BACKEND_DOMAIN/api/health`, confirms the delivery app still works, and confirms backups are scheduled. After go-live, QA must not write to the live DB.
 
 **Throughout the project:**
 - Business rules are the source of truth. Any conflict goes to the product-analyst, and to me if behavior must change.

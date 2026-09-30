@@ -1,0 +1,837 @@
+openapi: 3.0.3
+info:
+  title: Simple POS API
+  version: 1.0.0
+paths:
+  /api/auth/login:
+    post:
+      operationId: login
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequestRequest'
+        required: true
+      security:
+      - bearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/AuthSession'
+          description: ''
+  /api/auth/logout:
+    post:
+      operationId: logout
+      parameters:
+      - in: header
+        name: X-Requested-With
+        schema:
+          type: string
+        required: true
+      tags:
+      - auth
+      security:
+      - bearerAuth: []
+      - {}
+      responses:
+        '204':
+          description: No response body
+  /api/auth/me:
+    get:
+      operationId: getMe
+      tags:
+      - auth
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/CurrentUser'
+          description: ''
+  /api/auth/refresh:
+    post:
+      operationId: refreshSession
+      parameters:
+      - in: header
+        name: X-Requested-With
+        schema:
+          type: string
+        required: true
+      tags:
+      - auth
+      security:
+      - bearerAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/AuthSession'
+          description: ''
+  /api/cashiers:
+    get:
+      operationId: listCashiers
+      parameters:
+      - in: query
+        name: page
+        schema:
+          type: integer
+      - in: query
+        name: page_size
+        schema:
+          type: integer
+      - in: query
+        name: search
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+      tags:
+      - cashiers
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/CashierPage'
+          description: ''
+  /api/cashiers/{id}:
+    get:
+      operationId: getCashier
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - cashiers
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/CashierDetail'
+          description: ''
+  /api/health:
+    get:
+      operationId: getHealth
+      parameters:
+      - in: header
+        name: X-Health-Check-Token
+        schema:
+          type: string
+      - in: query
+        name: password
+        schema:
+          type: string
+      tags:
+      - health
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Health'
+          description: ''
+  /api/settings:
+    get:
+      operationId: getSettings
+      tags:
+      - settings
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Settings'
+          description: ''
+    patch:
+      operationId: updateSettings
+      tags:
+      - settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSettingsUpdateRequest'
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/Settings'
+          description: ''
+  /api/users:
+    get:
+      operationId: listUsers
+      parameters:
+      - in: query
+        name: page
+        schema:
+          type: integer
+      - in: query
+        name: page_size
+        schema:
+          type: integer
+      - in: query
+        name: role
+        schema:
+          type: string
+      - in: query
+        name: search
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+      tags:
+      - users
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/UserPage'
+          description: ''
+    post:
+      operationId: createUser
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+        required: true
+      security:
+      - bearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/User'
+          description: ''
+  /api/users/{id}:
+    get:
+      operationId: getUser
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - users
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/User'
+          description: ''
+    patch:
+      operationId: updateUser
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserUpdateRequest'
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                - message
+                - data
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                    - true
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/User'
+          description: ''
+components:
+  schemas:
+    AuthSession:
+      type: object
+      properties:
+        access_token:
+          type: string
+          readOnly: true
+        token_type:
+          allOf:
+          - $ref: '#/components/schemas/TokenTypeEnum'
+          readOnly: true
+        access_expires_in:
+          type: integer
+          readOnly: true
+        user:
+          allOf:
+          - $ref: '#/components/schemas/CurrentUser'
+          readOnly: true
+      required:
+      - access_expires_in
+      - access_token
+      - token_type
+      - user
+    CashierCounts:
+      type: object
+      properties:
+        all:
+          type: integer
+        active:
+          type: integer
+        disabled:
+          type: integer
+      required:
+      - active
+      - all
+      - disabled
+    CashierDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+        role:
+          $ref: '#/components/schemas/CashierDetailRoleEnum'
+        status:
+          allOf:
+          - $ref: '#/components/schemas/Status041Enum'
+          readOnly: true
+        last_login_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        current_shift:
+          allOf:
+          - $ref: '#/components/schemas/ShiftLive'
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - current_shift
+      - id
+      - last_login_at
+      - name
+      - role
+      - status
+      - username
+    CashierDetailRoleEnum:
+      enum:
+      - CASHIER
+      type: string
+      description: '* `CASHIER` - CASHIER'
+    CashierListItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/Status041Enum'
+          readOnly: true
+        last_login_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        current_shift:
+          allOf:
+          - $ref: '#/components/schemas/ShiftRef'
+          nullable: true
+      required:
+      - current_shift
+      - id
+      - last_login_at
+      - name
+      - status
+      - username
+    CashierPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CashierListItem'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        counts:
+          $ref: '#/components/schemas/CashierCounts'
+      required:
+      - counts
+      - items
+      - pagination
+    CurrentUser:
+      type: object
+      description: 'BR-AUTH-04: the PWA routes by `role`.'
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+        role:
+          allOf:
+          - $ref: '#/components/schemas/Role3b4Enum'
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/Status041Enum'
+          readOnly: true
+      required:
+      - id
+      - name
+      - role
+      - status
+      - username
+    Health:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/HealthStatusEnum'
+      required:
+      - status
+    HealthStatusEnum:
+      enum:
+      - healthy
+      type: string
+      description: '* `healthy` - healthy'
+    LoginRequestRequest:
+      type: object
+      description: Username only, never email (OQ-4); case-insensitive (BR §2 User).
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 128
+        remember_me:
+          type: boolean
+          default: false
+      required:
+      - password
+      - username
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total_items:
+          type: integer
+        total_pages:
+          type: integer
+      required:
+      - page
+      - page_size
+      - total_items
+      - total_pages
+    PatchedSettingsUpdateRequest:
+      type: object
+      properties:
+        business_name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        receipt_footer:
+          type: string
+          maxLength: 200
+    PatchedUserUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+        password:
+          type: string
+          writeOnly: true
+          maxLength: 128
+          minLength: 8
+        role:
+          $ref: '#/components/schemas/Role3b4Enum'
+        status:
+          $ref: '#/components/schemas/Status041Enum'
+    Role3b4Enum:
+      enum:
+      - ADMIN
+      - CASHIER
+      type: string
+      description: |-
+        * `ADMIN` - Admin
+        * `CASHIER` - Cashier
+    Settings:
+      type: object
+      properties:
+        business_name:
+          type: string
+          readOnly: true
+        receipt_footer:
+          type: string
+          readOnly: true
+      required:
+      - business_name
+      - receipt_footer
+    ShiftLive:
+      type: object
+      properties:
+        id:
+          type: integer
+        code:
+          type: string
+        opened_at:
+          type: string
+          format: date-time
+        orders_count:
+          type: integer
+        sales_total_minor:
+          type: integer
+      required:
+      - code
+      - id
+      - opened_at
+      - orders_count
+      - sales_total_minor
+    ShiftRef:
+      type: object
+      properties:
+        id:
+          type: integer
+        code:
+          type: string
+        opened_at:
+          type: string
+          format: date-time
+      required:
+      - code
+      - id
+      - opened_at
+    Status041Enum:
+      enum:
+      - ACTIVE
+      - DISABLED
+      type: string
+      description: |-
+        * `ACTIVE` - Active
+        * `DISABLED` - Disabled
+    TokenTypeEnum:
+      enum:
+      - Bearer
+      type: string
+      description: '* `Bearer` - Bearer'
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+        role:
+          allOf:
+          - $ref: '#/components/schemas/Role3b4Enum'
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/Status041Enum'
+          readOnly: true
+        last_login_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        has_open_shift:
+          type: boolean
+          readOnly: true
+      required:
+      - created_at
+      - has_open_shift
+      - id
+      - last_login_at
+      - name
+      - role
+      - status
+      - username
+    UserCounts:
+      type: object
+      properties:
+        all:
+          type: integer
+        admin:
+          type: integer
+        cashier:
+          type: integer
+      required:
+      - admin
+      - all
+      - cashier
+    UserCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        username:
+          type: string
+          minLength: 3
+          maxLength: 32
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+          maxLength: 128
+        role:
+          $ref: '#/components/schemas/Role3b4Enum'
+        status:
+          allOf:
+          - $ref: '#/components/schemas/Status041Enum'
+          default: ACTIVE
+      required:
+      - name
+      - password
+      - role
+      - username
+    UserPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        counts:
+          $ref: '#/components/schemas/UserCounts'
+      required:
+      - counts
+      - items
+      - pagination
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

@@ -1,0 +1,15 @@
+{
+  "name": "simple-pos",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter frontend test",
+    "build": "pnpm --filter frontend build",
+    "gen:api": "pnpm --filter frontend gen:api"
+  }
+}
