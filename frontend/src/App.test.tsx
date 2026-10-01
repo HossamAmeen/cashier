@@ -1,6 +1,8 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 
+import { AuthProvider } from './auth/AuthProvider';
 import { routes } from './routes';
 
 describe('scaffold', () => {
@@ -12,8 +14,16 @@ describe('scaffold', () => {
   });
 
   it('renders the login route', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const router = createMemoryRouter(routes, { initialEntries: ['/login'] });
-    render(<RouterProvider router={router} />);
-    expect(screen.getByRole('heading', { name: 'تسجيل الدخول' })).toBeInTheDocument();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <RouterProvider router={router} />
+        </AuthProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole('button', { name: 'تسجيل الدخول' })).toBeInTheDocument();
   });
 });
+

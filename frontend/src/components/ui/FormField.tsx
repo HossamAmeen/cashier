@@ -17,10 +17,11 @@ export interface FormFieldProps extends Omit<InputHTMLAttributes<HTMLInputElemen
   /** Numbers / amounts: typed and shown left-to-right with Western digits (BR-GEN-05). */
   numeric?: boolean;
   containerClassName?: string;
+  children?: ReactNode;
 }
 
 export const FormField = forwardRef<HTMLInputElement, FormFieldProps>(function FormField(
-  { label, icon, end, hint, error, numeric, id, className, containerClassName, ...rest },
+  { label, icon, end, hint, error, numeric, id, className, containerClassName, children, ...rest },
   ref,
 ) {
   const autoId = useId();
@@ -42,20 +43,24 @@ export const FormField = forwardRef<HTMLInputElement, FormFieldProps>(function F
         )}
       >
         {icon && <Icon name={icon} size={18} className="text-ink-muted" />}
-        <input
-          ref={ref}
-          id={inputId}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={describedBy}
-          dir={numeric ? 'ltr' : undefined}
-          inputMode={numeric ? 'decimal' : undefined}
-          className={cn(
-            'min-w-0 flex-1 bg-transparent text-body-lg text-ink outline-none placeholder:text-ink-disabled',
-            numeric && 'text-end tabular-nums',
-            className,
-          )}
-          {...rest}
-        />
+        {children ? (
+          children
+        ) : (
+          <input
+            ref={ref}
+            id={inputId}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={describedBy}
+            dir={numeric ? 'ltr' : undefined}
+            inputMode={numeric ? 'decimal' : undefined}
+            className={cn(
+              'min-w-0 flex-1 bg-transparent text-body-lg text-ink outline-none placeholder:text-ink-disabled',
+              numeric && 'text-end tabular-nums',
+              className,
+            )}
+            {...rest}
+          />
+        )}
         {end}
       </div>
       {hint && (
