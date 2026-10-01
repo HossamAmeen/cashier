@@ -61,7 +61,7 @@ export function AppShell() {
         <div className="flex h-16 items-center justify-between border-b border-slate-800 px-4">
           <Link to="/" className="flex items-center gap-3 overflow-hidden">
             <BrandMark className="h-8 w-8 text-[#0d7a6b] shrink-0" />
-            {!collapsed && <span className="font-bold text-lg tracking-wide text-white truncate">سيمبل بوينت</span>}
+            {!collapsed && <span className="font-bold text-lg tracking-wide text-white truncate">كاشيري</span>}
           </Link>
           <button
             type="button"

@@ -11,8 +11,8 @@ export function BrandMark({ compact = false, className }: { compact?: boolean; c
       </span>
       {!compact && (
         <span className="flex flex-col leading-tight">
-          <span className="text-body-lg font-bold">Simple POS</span>
-          <span className="text-label opacity-70">نظام الكاشير المبسط</span>
+          <span className="text-body-lg font-bold">كاشيري</span>
+          <span className="text-label opacity-70">نظام إدارة نقاط البيع</span>
         </span>
       )}
     </div>

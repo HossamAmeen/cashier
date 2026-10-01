@@ -25,7 +25,7 @@ test.describe('API: Store Settings (T02-QA-01)', () => {
     const resp = await request.patch(`${API_URL}/api/settings`, {
       headers: { ...CSRF_HEADER, Authorization: `Bearer ${adminToken}` },
       data: {
-        business_name: 'سيمبل بوينت - الفرع الرئيسي',
+        business_name: 'كاشيري - الفرع الرئيسي',
         receipt_header: 'أهلاً بكم في مطعمنا',
         receipt_footer: 'شكراً لزيارتكم',
       },
@@ -33,6 +33,6 @@ test.describe('API: Store Settings (T02-QA-01)', () => {
 
     expect(resp.status()).toBe(200);
     const body = await resp.json();
-    expect(body.data.business_name).toBe('سيمبل بوينت - الفرع الرئيسي');
+    expect(body.data.business_name).toBe('كاشيري - الفرع الرئيسي');
   });
 });

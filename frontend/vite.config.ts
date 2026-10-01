@@ -13,8 +13,8 @@ export default defineConfig({
       registerType: 'prompt',
       includeAssets: ['icons/*.png', 'icons/*.svg'],
       manifest: {
-        name: 'Simple POS — نظام الكاشير المبسط',
-        short_name: 'Simple POS',
+        name: 'كاشيري — نظام إدارة نقاط البيع',
+        short_name: 'كاشيري',
         description: 'نظام كاشير مبسط للمطاعم والمقاهي',
         lang: 'ar',
         dir: 'rtl',

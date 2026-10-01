@@ -50,7 +50,7 @@ export function Login() {
       <div className="w-full max-w-md space-y-6">
         <div className="flex flex-col items-center text-center">
           <BrandMark className="h-16 w-16 text-[#0d7a6b]" />
-          <h1 className="mt-4 text-2xl font-bold tracking-tight text-white">سيمبل بوينت (Simple POS)</h1>
+          <h1 className="mt-4 text-2xl font-bold tracking-tight text-white">كاشيري</h1>
           <p className="mt-1 text-sm text-slate-300">نظام إدارة نقاط البيع للمطاعم والكافيهات</p>
         </div>
 

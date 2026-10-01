@@ -180,7 +180,7 @@ HEALTH_CHECK_PASSWORD = env("HEALTH_CHECK_PASSWORD")
 
 # --- OpenAPI (ADR-0008) -----------------------------------------------------------
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Simple POS API",
+    "TITLE": "Cashieri API",
     "VERSION": "1.0.0",
     "OAS_VERSION": "3.0.3",
     "SERVE_INCLUDE_SCHEMA": False,
@@ -194,11 +194,11 @@ SPECTACULAR_SETTINGS = {
 
 # --- Admin (DRF_SKILL §22) ------------------------------------------------------------
 JAZZMIN_SETTINGS = {
-    "site_title": "Simple POS Admin",
-    "site_header": "Simple POS",
-    "site_brand": "Simple POS",
-    "welcome_sign": "Simple POS administration",
-    "copyright": "Simple POS",
+    "site_title": "كاشيري Admin",
+    "site_header": "كاشيري",
+    "site_brand": "كاشيري",
+    "welcome_sign": "كاشيري administration",
+    "copyright": "كاشيري",
     "show_sidebar": True,
     "navigation_expanded": True,
 }

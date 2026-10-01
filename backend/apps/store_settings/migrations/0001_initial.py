@@ -26,7 +26,7 @@ class Migration(migrations.Migration):
                 ("modified_at", models.DateTimeField(auto_now=True)),
                 (
                     "business_name",
-                    models.CharField(default="سيمبل بوينت", max_length=80),
+                    models.CharField(default="كاشيري", max_length=80),
                 ),
                 (
                     "receipt_footer",

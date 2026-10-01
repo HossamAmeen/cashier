@@ -16,7 +16,7 @@ CHECK_BUSINESS_NAME_NOT_BLANK = "store_settings_business_name_not_blank"
 class Settings(BaseModel):
     """Singleton row for store settings (id=1 constraint)."""
 
-    business_name = models.CharField(max_length=BUSINESS_NAME_MAX_LENGTH, default="سيمبل بوينت")
+    business_name = models.CharField(max_length=BUSINESS_NAME_MAX_LENGTH, default="كاشيري")
     receipt_footer = models.CharField(max_length=RECEIPT_FOOTER_MAX_LENGTH, default="شكرًا لزيارتكم", blank=True)
 
     class Meta:
@@ -35,7 +35,7 @@ class Settings(BaseModel):
         obj, _ = cls.objects.get_or_create(
             pk=1,
             defaults={
-                "business_name": "سيمبل بوينت",
+                "business_name": "كاشيري",
                 "receipt_footer": "شكرًا لزيارتكم",
             },
         )

@@ -4,7 +4,7 @@ test.describe('UI: Login Flow (T01-QA-01)', () => {
   test('Screen 01 renders login form and handles invalid login error', async ({ page }) => {
     await page.goto('/login');
 
-    await expect(page.locator('h1')).toContainText('سيمبل بوينت');
+    await expect(page.locator('h1')).toContainText('كاشيري');
     await page.fill('input[name="username"]', 'admin');
     await page.fill('input[type="password"]', 'WrongPassword!');
     await page.click('button[type="submit"]');
