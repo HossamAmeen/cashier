@@ -59,7 +59,12 @@ export function Categories() {
     },
   });
 
-  const categories: CategoryItem[] = (data as unknown as CategoryItem[]) || [];
+  const rawCategories = Array.isArray(data)
+    ? data
+    : (data as unknown as { items?: CategoryItem[]; categories?: CategoryItem[] })?.items ||
+      (data as unknown as { items?: CategoryItem[]; categories?: CategoryItem[] })?.categories ||
+      [];
+  const categories: CategoryItem[] = Array.isArray(rawCategories) ? rawCategories : [];
 
   const openAddModal = () => {
     setEditingCategory(null);

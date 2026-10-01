@@ -45,6 +45,8 @@ export function DataTable<T>({
     }
   };
 
+  const safeRows = Array.isArray(rows) ? rows : [];
+
   return (
     <div className="overflow-x-auto rounded-card border border-surface-border bg-surface shadow-card">
       <table className="w-full border-collapse text-start text-body" data-testid={testId} aria-busy={loading || undefined}>
@@ -66,14 +68,14 @@ export function DataTable<T>({
                 <span className="sr-only">جارٍ التحميل</span>
               </td>
             </tr>
-          ) : rows.length === 0 ? (
+          ) : safeRows.length === 0 ? (
             <tr>
               <td colSpan={columns.length} className="px-4 py-10 text-center text-ink-muted">
                 {empty}
               </td>
             </tr>
           ) : (
-            rows.map((row) => (
+            safeRows.map((row) => (
               <tr
                 key={rowKey(row)}
                 data-testid={`${testId}-row-${rowKey(row)}`}

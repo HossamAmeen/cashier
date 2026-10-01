@@ -48,7 +48,12 @@ export function Items() {
     },
   });
 
-  const categories: CategoryItem[] = (categoriesData as unknown as CategoryItem[]) || [];
+  const rawCategories = Array.isArray(categoriesData)
+    ? categoriesData
+    : (categoriesData as unknown as { items?: CategoryItem[]; categories?: CategoryItem[] })?.items ||
+      (categoriesData as unknown as { items?: CategoryItem[]; categories?: CategoryItem[] })?.categories ||
+      [];
+  const categories: CategoryItem[] = Array.isArray(rawCategories) ? rawCategories : [];
 
   // Fetch items
   const { data: itemsData, isLoading } = useQuery({
