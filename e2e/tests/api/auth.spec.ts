@@ -54,6 +54,6 @@ test.describe('API: Auth (T01-QA-01)', () => {
 
     expect(meResp.status()).toBe(200);
     const meBody = await meResp.json();
-    expect(meBody.data.user.username).toBe('admin');
+    expect(meBody.data.username).toBe('admin');
   });
 });

@@ -18,7 +18,7 @@ test.describe('API: Catalog Categories and Items (T03-QA-01)', () => {
     });
     expect(resp.status()).toBe(200);
     const body = await resp.json();
-    expect(Array.isArray(body.data)).toBe(true);
+    expect(Array.isArray(body.data.categories)).toBe(true);
   });
 
   test('BR-ITEM-07 Admin can create category', async ({ request }) => {
