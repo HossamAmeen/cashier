@@ -22,7 +22,7 @@ test.describe('API: Store Settings (T02-QA-01)', () => {
   });
 
   test('BR-SET-02 Admin can update store settings', async ({ request }) => {
-    const resp = await request.put(`${API_URL}/api/settings`, {
+    const resp = await request.patch(`${API_URL}/api/settings`, {
       headers: { ...CSRF_HEADER, Authorization: `Bearer ${adminToken}` },
       data: {
         business_name: 'سيمبل بوينت - الفرع الرئيسي',

@@ -357,9 +357,9 @@ export function OrderEditor() {
       <div className="space-y-4 lg:col-span-5">
         <Card className="p-5 space-y-4">
           <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-            <h2 className="text-lg font-bold text-slate-900">
-              {isEditMode ? 'تعديل الطلب' : 'سلة الطلب الجديدة'}
-            </h2>
+            <h1 className="text-lg font-bold text-slate-900">
+              {isEditMode ? 'تعديل الطلب' : 'طلب جديد'}
+            </h1>
             <Badge tone="info">{cartLines.length} أصناف</Badge>
           </div>
 
