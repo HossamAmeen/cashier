@@ -58,6 +58,7 @@ export function Login() {
           <form onSubmit={handleSubmit} className="space-y-5">
             {error && (
               <div
+                role="alert"
                 className="rounded-lg bg-red-950/80 p-3 text-center text-sm font-medium text-red-200 border border-red-800/50"
                 data-testid="s01-error"
               >

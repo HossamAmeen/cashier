@@ -6,6 +6,7 @@ test.describe('UI: Shift Close (T08-FE-01)', () => {
     await page.fill('input[name="username"]', 'cashier');
     await page.fill('input[type="password"]', 'Password123!');
     await page.click('button[type="submit"]');
+    await page.waitForURL('/');
 
     await page.goto('/shift/close');
     await expect(page.locator('h1')).toContainText('إغلاق');
