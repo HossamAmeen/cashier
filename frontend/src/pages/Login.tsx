@@ -67,6 +67,7 @@ export function Login() {
 
             <FormField label="اسم المستخدم" required>
               <input
+                name="username"
                 type="text"
                 required
                 dir="ltr"
@@ -81,6 +82,7 @@ export function Login() {
 
             <FormField label="كلمة المرور" required>
               <input
+                name="password"
                 type="password"
                 required
                 dir="ltr"
