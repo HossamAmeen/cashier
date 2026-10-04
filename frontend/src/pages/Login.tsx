@@ -4,10 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import { ApiError } from '@/api/client';
 import { useAuth } from '@/auth/useAuth';
 import { homeFor } from '@/auth/session';
-import { BrandMark } from '@/components/BrandMark';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { FormField } from '@/components/ui/FormField';
+import { Icon } from '@/components/Icon';
 import { errorMessage, type ClientErrorCode } from '@/lib/errors';
 
 export function Login() {
@@ -17,6 +17,7 @@ export function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(notice ? errorMessage(notice) : null);
 
@@ -46,65 +47,87 @@ export function Login() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-[#0f2724] px-4 py-8 text-white">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-[#0f2724] px-4 py-8">
       <div className="w-full max-w-md space-y-6">
-        <div className="flex flex-col items-center text-center">
-          <BrandMark className="h-16 w-16 text-[#0d7a6b]" />
-          <h1 className="mt-4 text-2xl font-bold tracking-tight text-white">كاشيري</h1>
-          <p className="mt-1 text-sm text-slate-300">نظام إدارة نقاط البيع للمطاعم والكافيهات</p>
-        </div>
+        {/* Header Branding */}
+        <header className="flex flex-col items-center gap-3 text-center">
+          <div
+            aria-hidden="true"
+            className="grid size-16 place-items-center rounded-card bg-accent text-white shadow-[0_8px_24px_-6px_rgba(20,184,166,0.6)] ring-4 ring-white/10"
+          >
+            <Icon name="receipt" size={32} />
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-h1 text-white">كاشيري</h1>
+            <p className="text-body text-sidebar-muted">نظام إدارة نقاط البيع للمطاعم والكافيهات</p>
+          </div>
+        </header>
 
-        <Card className="border-slate-700 bg-slate-900/90 p-6 shadow-xl backdrop-blur">
+        {/* Login Form Card */}
+        <Card className="p-6 sm:p-8 shadow-2xl rounded-card border-surface-border bg-surface">
           <form onSubmit={handleSubmit} className="space-y-5">
             {error && (
               <div
                 role="alert"
-                className="rounded-lg bg-red-950/80 p-3 text-center text-sm font-medium text-red-200 border border-red-800/50"
+                className="flex items-center justify-center gap-2 rounded-control bg-danger-soft p-3.5 text-sm font-medium text-danger border border-danger/20 text-center"
                 data-testid="s01-error"
               >
-                {error}
+                <Icon name="alert" size={18} className="shrink-0" />
+                <span>{error}</span>
               </div>
             )}
 
-            <FormField label="اسم المستخدم" required>
-              <input
-                name="username"
-                type="text"
-                required
-                dir="ltr"
-                autoComplete="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="مثال: cashier1"
-                className="w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2.5 text-white placeholder-slate-400 focus:border-[#0d7a6b] focus:outline-none focus:ring-1 focus:ring-[#0d7a6b]"
-                data-testid="s01-username"
-              />
-            </FormField>
+            <FormField
+              label="اسم المستخدم"
+              icon="user"
+              name="username"
+              type="text"
+              required
+              dir="ltr"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="مثال: admin"
+              data-testid="s01-username"
+            />
 
-            <FormField label="كلمة المرور" required>
-              <input
-                name="password"
-                type="password"
-                required
-                dir="ltr"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-md border border-slate-700 bg-slate-800 px-3 py-2.5 text-white placeholder-slate-400 focus:border-[#0d7a6b] focus:outline-none focus:ring-1 focus:ring-[#0d7a6b]"
-                data-testid="s01-password"
-              />
-            </FormField>
+            <FormField
+              label="كلمة المرور"
+              icon="lock"
+              name="password"
+              type={showPassword ? 'text' : 'password'}
+              required
+              dir="ltr"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              data-testid="s01-password"
+              end={
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="text-ink-muted hover:text-ink transition-colors p-1 rounded focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  title={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                  aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                >
+                  <Icon name={showPassword ? 'eyeOff' : 'eye'} size={18} />
+                </button>
+              }
+            />
 
-            <div className="flex items-center justify-between text-sm">
-              <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+            <div className="flex items-center justify-between pt-1">
+              <label className="flex items-center gap-2.5 cursor-pointer select-none group">
                 <input
                   type="checkbox"
                   checked={rememberMe}
                   onChange={(e) => setRememberMe(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-700 bg-slate-800 text-[#0d7a6b] focus:ring-[#0d7a6b]"
+                  className="size-5 rounded border-surface-border accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary cursor-pointer"
                   data-testid="s01-remember"
                 />
-                <span>تذكرني على هذا الجهاز</span>
+                <span className="text-body font-medium text-ink transition-colors group-hover:text-primary">
+                  تذكرني على هذا الجهاز
+                </span>
               </label>
             </div>
 
@@ -112,16 +135,18 @@ export function Login() {
               type="submit"
               variant="primary"
               size="lg"
+              block
               loading={loading}
-              className="w-full h-[58px] text-lg font-semibold bg-[#0d7a6b] hover:bg-[#0a6357]"
+              icon="login"
+              className="w-full text-body-lg font-semibold shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30"
               data-testid="s01-submit"
             >
               تسجيل الدخول
             </Button>
           </form>
 
-          <div className="mt-6 border-t border-slate-800 pt-4 text-center">
-            <p className="text-xs text-slate-400">
+          <div className="mt-6 border-t border-surface-border pt-4 text-center">
+            <p className="text-label text-ink-muted leading-relaxed">
               نسيت كلمة المرور؟ يرجى التواصل مع مسؤول النظام لإعادة تعيين كلمة المرور
             </p>
           </div>
