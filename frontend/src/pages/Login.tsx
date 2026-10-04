@@ -151,6 +151,10 @@ export function Login() {
             </p>
           </div>
         </Card>
+
+        <p className="text-center text-label text-sidebar-muted" dir="ltr" data-testid="s01-version">
+          v{__APP_VERSION__}
+        </p>
       </div>
     </div>
   );

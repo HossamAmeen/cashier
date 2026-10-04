@@ -936,6 +936,11 @@ export interface components {
         Health: {
             /** @enum {string} */
             status: "healthy";
+            /**
+             * @description Deployed backend version (`APP_VERSION`).
+             * @example 0.1.0
+             */
+            version: string;
         };
         /** @description The authenticated user (BR-AUTH-04 routing uses `role`). */
         CurrentUser: {

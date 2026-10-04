@@ -18,6 +18,7 @@ SECRET_KEY = env("SECRET_KEY")
 DEBUG = env.bool("DEBUG", default=False)
 ALLOWED_HOSTS: list[str] = env.list("ALLOWED_HOSTS", default=[])
 APP_ENV = env("APP_ENV", default="development")  # development | production (ADR-0004)
+APP_VERSION = env("APP_VERSION", default="0.1.0")  # reported by GET /api/health
 PRELAUNCH = env.bool("PRELAUNCH", default=False)  # true until GATE C (ADR-0004)
 
 INSTALLED_APPS = [

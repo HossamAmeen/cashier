@@ -94,6 +94,12 @@ export function AppShell() {
           ))}
         </nav>
 
+        {!collapsed && (
+          <p className="px-4 pb-2 text-xs text-slate-500" dir="ltr" data-testid="app-version">
+            v{__APP_VERSION__}
+          </p>
+        )}
+
         {/* User Info & Logout Footer */}
         <div className="border-t border-slate-800 p-3">
           {!collapsed && (

@@ -41,7 +41,10 @@ class HealthView(APIView):
         responses={
             200: inline_serializer(
                 "Health",
-                fields={"status": serializers.ChoiceField(choices=["healthy"])},
+                fields={
+                    "status": serializers.ChoiceField(choices=["healthy"]),
+                    "version": serializers.CharField(),
+                },
             )
         },
     )
@@ -50,4 +53,4 @@ class HealthView(APIView):
         expected = str(settings.HEALTH_CHECK_PASSWORD)
         if not supplied or not hmac.compare_digest(supplied.encode(), expected.encode()):
             raise AppError(ErrorCode.UNAUTHENTICATED)
-        return Response({"status": "healthy"})
+        return Response({"status": "healthy", "version": settings.APP_VERSION})

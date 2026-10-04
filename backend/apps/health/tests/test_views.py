@@ -1,6 +1,7 @@
 """DRF_SKILL §27 required health tests."""
 
 import pytest
+from django.conf import settings
 from rest_framework.test import APIClient
 
 URL = "/api/health"
@@ -11,7 +12,7 @@ PASSWORD = "test-health-password"
 def test_health_endpoint_returns_success_with_valid_password(api_client: APIClient) -> None:
     res = api_client.get(URL, HTTP_X_HEALTH_CHECK_TOKEN=PASSWORD)
     assert res.status_code == 200
-    assert res.json() == {"success": True, "message": "OK", "data": {"status": "healthy"}}
+    assert res.json() == {"success": True, "message": "OK", "data": {"status": "healthy", "version": settings.APP_VERSION}}
 
 
 def test_health_endpoint_accepts_query_password(api_client: APIClient) -> None:
