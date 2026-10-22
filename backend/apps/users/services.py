@@ -51,8 +51,9 @@ def _lock_login_key(username: str, ip: str) -> None:
     """Serialise attempts for one (username, IP) so parallel requests cannot exceed the limit (BR-AUTH-03)."""
     if connection.vendor != "postgresql":
         return
+    # PostgreSQL text cannot hold NUL, so the separator is the unit separator (0x1f).
     with connection.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", [f"login:{username}\x00{ip}"])
+        cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", [f"login:{username}\x1f{ip}"])
 
 
 def _retry_after_seconds(failure_times: list[datetime], now: datetime) -> int:
